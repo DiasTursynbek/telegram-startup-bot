@@ -2,8 +2,10 @@ name: Telegram Bot
 
 on:
   schedule:
-    - cron: '46 17 * * *'  # ТЕСТ через 5 минут
-    - cron: '47 17 * * *'  # ТЕСТ через 5 минут
+    - cron: '20 17 * * *'  
+    - cron: '20 17 * * *'
+    - cron: '20 18 * * *'
+    - cron: '20 18 * * *' 
   workflow_dispatch:       # Ручной запуск
 
 jobs:
