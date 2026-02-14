@@ -1,3 +1,4 @@
+import os 
 import asyncio
 import logging
 from datetime import datetime, time
@@ -19,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ========== НАСТРОЙКИ - ИЗМЕНИТЕ ЗДЕСЬ ==========
-BOT_TOKEN = "8587519643:AAG-cWoQEV96ABp_dTIR5jDZyjbqjuUxewY"
+BOT_TOKEN = os.getenv('BOT_TOKEN', "8087519643:AAG-cWoQEV96ABp_dTIR5jDZyjbqjuUxewY")
 CHANNEL_ID = "@startup_events_kz"
 
 # Время публикации (по UTC)
