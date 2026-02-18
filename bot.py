@@ -216,9 +216,34 @@ def extract_title(text: str) -> Optional[str]:
         clean = re.sub(r'\s+', ' ', clean).strip()
         if len(clean) < 10:
             continue
+        if 't.me/' in clean or 'http' in clean:
+            continue
+
+        # Убираем дату+время+город в начале строки:
+        # Примеры: "20 Фев, 15:00Актай..." / "23 Фев, 17:30Кокшетай..."
+        clean = re.sub(
+            r'^\d{1,2}\s+[А-ЯЁа-яё]{3,}[,.]?\s*\d{1,2}:\d{2}\s*[А-ЯЁA-Za-z\-]*\s*',
+            '', clean
+        ).strip()
+        # Убираем просто "20 Фев, ..." без времени
+        clean = re.sub(
+            r'^\d{1,2}\s+[А-ЯЁа-яё]{3,}[,.]?\s*[А-ЯЁA-Za-z\-]*\s*',
+            '', clean
+        ).strip()
+        # Убираем дубли: "Текст текст" когда первая часть == вторая
+        half = len(clean) // 2
+        if half > 20 and clean[:half].strip() == clean[half:half*2].strip():
+            clean = clean[:half].strip()
+
+        # Пропускаем строки начинающиеся с цифры (дата)
         if re.match(r'^\d{1,2}[.\-:\s]', clean):
             continue
-        if 't.me/' in clean or 'http' in clean:
+
+        # Пропускаем если похоже на имя автора (Имя Фамилия без других слов)
+        if re.match(r'^[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+$', clean):
+            continue
+
+        if len(clean) < 10:
             continue
         return clean[:120]
     return None
@@ -546,6 +571,19 @@ class EventBot:
                 title = extract_title(text)
                 if not title:
                     logger.info(f"\u23ed\ufe0f Нет заголовка: {text[:50].strip()}")
+                    continue
+                # Если заголовок — имя автора (Имя Фамилия), ищем тему в следующих строках
+                if re.match(r'^[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+$', title.strip()):
+                    lines_all = text.strip().split('\n')
+                    title = None
+                    for ln in lines_all[1:]:
+                        ln_c = strip_emoji(ln).strip()
+                        if len(ln_c) > 15 and not re.match(r'^\d', ln_c) and 'http' not in ln_c:
+                            if not re.match(r'^[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+$', ln_c):
+                                title = ln_c[:120]
+                                break
+                if not title:
+                    logger.info(f"\u23ed\ufe0f Только автор, нет темы: {text[:50].strip()}")
                     continue
 
                 time_m = re.search(r'(?:в\s+)(\d{1,2}:\d{2})', text)
