@@ -209,25 +209,31 @@ def extract_venue(text: str) -> Optional[str]:
 # ЗАГОЛОВОК
 # ──────────────────────────────────────────────
 
-def clean_title_line(line: str) -> str:
-    """Убирает слипшийся мусор в начале строки: дату, время, город."""
-    s = line
-
-    # "09 Фев, 17:00Шымкент..." / "20 Фев, 15:00Актау..." — город без пробела после времени
+def strip_date_prefix(s: str) -> str:
+    """Вырезает 'ДД Мес, ЧЧ:ММГород' из начала строки."""
     s = re.sub(
-        r'^\d{1,2}\s+[А-ЯЁа-яёA-Za-z]{2,}[,.]?\s*\d{1,2}:\d{2}([А-ЯЁ][а-яё]+)?\s*',
+        r'^\d{1,2}\s+[А-ЯЁа-яё]{3,}[,\s]*\d{1,2}:\d{2}\s*[А-ЯЁ][а-яё]*\s*',
         '', s
     )
-
-    # Убираем дубли: "ТекстТекст" или "Текст...Текст..." — повтор с начала
-    for split in range(10, len(s) // 2 + 1):
-        candidate = s[:split]
-        rest = s[split:]
-        if rest.startswith(candidate):
-            s = candidate + rest[len(candidate):]
-            break
-
+    s = re.sub(r'^\d{1,2}\s+[А-ЯЁа-яё]{3,}[,\s]*', '', s)
     return s.strip()
+
+
+def remove_duplicates(s: str) -> str:
+    """Убирает слипшийся дубль: 'TextText' -> 'Text'."""
+    for split in range(10, len(s) // 2 + 1):
+        if s[split:].startswith(s[:split]):
+            return s[:split].strip()
+    return s
+
+
+def cut_repeated_tail(s: str) -> str:
+    """Режет хвост после [.!?] если там начинается повтор начала строки."""
+    for m in re.finditer(r'[.!?]\s*', s):
+        tail = s[m.end():]
+        if len(tail) > 5 and s.startswith(tail[:min(15, len(tail))]):
+            return s[:m.end()].strip()
+    return s
 
 
 def extract_title(text: str) -> Optional[str]:
@@ -240,19 +246,18 @@ def extract_title(text: str) -> Optional[str]:
         if 't.me/' in clean or 'http' in clean:
             continue
 
-        # Чистим дату/время/город из начала
-        clean = clean_title_line(clean)
-
-        # Пропускаем если осталась цифра в начале (дата)
-        if re.match(r'^\d{1,2}[.\-:\s]', clean):
-            continue
-
-        # Пропускаем "Имя Фамилия" — имя автора
-        if re.match(r'^[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+$', clean):
-            continue
+        clean = strip_date_prefix(clean)
+        clean = remove_duplicates(clean)
+        clean = cut_repeated_tail(clean)
+        clean = clean.strip(' .,\u2013')
 
         if len(clean) < 10:
             continue
+        if re.match(r'^\d{1,2}[.\-:\s]', clean):
+            continue
+        if re.match(r'^[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+$', clean):
+            continue
+
         return clean[:120]
     return None
 
