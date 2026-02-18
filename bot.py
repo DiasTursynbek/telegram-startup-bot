@@ -209,6 +209,27 @@ def extract_venue(text: str) -> Optional[str]:
 # ЗАГОЛОВОК
 # ──────────────────────────────────────────────
 
+def clean_title_line(line: str) -> str:
+    """Убирает слипшийся мусор в начале строки: дату, время, город."""
+    s = line
+
+    # "09 Фев, 17:00Шымкент..." / "20 Фев, 15:00Актау..." — город без пробела после времени
+    s = re.sub(
+        r'^\d{1,2}\s+[А-ЯЁа-яёA-Za-z]{2,}[,.]?\s*\d{1,2}:\d{2}([А-ЯЁ][а-яё]+)?\s*',
+        '', s
+    )
+
+    # Убираем дубли: "ТекстТекст" или "Текст...Текст..." — повтор с начала
+    for split in range(10, len(s) // 2 + 1):
+        candidate = s[:split]
+        rest = s[split:]
+        if rest.startswith(candidate):
+            s = candidate + rest[len(candidate):]
+            break
+
+    return s.strip()
+
+
 def extract_title(text: str) -> Optional[str]:
     lines = text.strip().split('\n')
     for line in lines:
@@ -219,27 +240,14 @@ def extract_title(text: str) -> Optional[str]:
         if 't.me/' in clean or 'http' in clean:
             continue
 
-        # Убираем дату+время+город в начале строки:
-        # Примеры: "20 Фев, 15:00Актай..." / "23 Фев, 17:30Кокшетай..."
-        clean = re.sub(
-            r'^\d{1,2}\s+[А-ЯЁа-яё]{3,}[,.]?\s*\d{1,2}:\d{2}\s*[А-ЯЁA-Za-z\-]*\s*',
-            '', clean
-        ).strip()
-        # Убираем просто "20 Фев, ..." без времени
-        clean = re.sub(
-            r'^\d{1,2}\s+[А-ЯЁа-яё]{3,}[,.]?\s*[А-ЯЁA-Za-z\-]*\s*',
-            '', clean
-        ).strip()
-        # Убираем дубли: "Текст текст" когда первая часть == вторая
-        half = len(clean) // 2
-        if half > 20 and clean[:half].strip() == clean[half:half*2].strip():
-            clean = clean[:half].strip()
+        # Чистим дату/время/город из начала
+        clean = clean_title_line(clean)
 
-        # Пропускаем строки начинающиеся с цифры (дата)
+        # Пропускаем если осталась цифра в начале (дата)
         if re.match(r'^\d{1,2}[.\-:\s]', clean):
             continue
 
-        # Пропускаем если похоже на имя автора (Имя Фамилия без других слов)
+        # Пропускаем "Имя Фамилия" — имя автора
         if re.match(r'^[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+$', clean):
             continue
 
