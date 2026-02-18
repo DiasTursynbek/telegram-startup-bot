@@ -1,13 +1,13 @@
 import os
 import asyncio
 import logging
-import json
 from datetime import datetime
 from typing import List, Dict, Optional
 import aiohttp
 from bs4 import BeautifulSoup
 from telegram import Bot
 import re
+import json
 
 logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 CHANNEL_ID = os.getenv('CHANNEL_ID', "-1003812789640")
 MESSAGE_THREAD_ID = int(os.getenv('MESSAGE_THREAD_ID', '4'))
+CLAUDE_API_KEY = os.getenv('CLAUDE_API_KEY', '')
 
 URLS = [
     {"url": "https://astanahub.com/ru/event/", "name": "Astana Hub"},
@@ -209,177 +210,71 @@ def extract_venue(text: str) -> Optional[str]:
 # ЗАГОЛОВОК
 # ──────────────────────────────────────────────
 
-def strip_date_prefix(s: str) -> str:
-    """Вырезает 'ДД Мес, ЧЧ:ММГород' из начала строки."""
-    s = re.sub(
-        r'^\d{1,2}\s+[А-ЯЁа-яё]{3,}[,\s]*\d{1,2}:\d{2}\s*[А-ЯЁ][а-яё]*\s*',
-        '', s
-    )
-    s = re.sub(r'^\d{1,2}\s+[А-ЯЁа-яё]{3,}[,\s]*', '', s)
-    return s.strip()
 
-
-def remove_duplicates(s: str) -> str:
-    """Убирает слипшийся дубль: 'TextText' -> 'Text'."""
-    for split in range(10, len(s) // 2 + 1):
-        if s[split:].startswith(s[:split]):
-            return s[:split].strip()
-    return s
-
-
-def cut_repeated_tail(s: str) -> str:
-    """Режет хвост после [.!?] если там начинается повтор начала строки."""
-    for m in re.finditer(r'[.!?]\s*', s):
-        tail = s[m.end():]
-        if len(tail) > 5 and s.startswith(tail[:min(15, len(tail))]):
-            return s[:m.end()].strip()
-    return s
-
-
-def extract_title(text: str) -> Optional[str]:
-    # Разбиваем склеенный текст: '17:00ГородTitle' -> '17:00 Город\nTitle'
-    text = re.sub(r'(\d{1,2}:\d{2})([А-ЯЁ][а-яё]+)([А-ЯЁA-Za-z])', r'\1 \2\n\3', text)
-    lines = text.strip().split('\n')
-    for line in lines:
-        clean = strip_emoji(line).strip(' -\u2013\u2022\xb7.,')
-        clean = re.sub(r'\s+', ' ', clean).strip()
-        if len(clean) < 10:
+def get_clean_title(text: str) -> Optional[str]:
+    """
+    Главная функция получения заголовка.
+    Находит 'ДД Мес, ЧЧ:ММГород' и берёт ВСЁ ПОСЛЕ — это название события.
+    Убирает дубли и хвостовой мусор.
+    """
+    for line in text.strip().split('\n'):
+        line = line.strip()
+        if len(line) < 10:
             continue
-        if 't.me/' in clean or 'http' in clean:
+        if 'http' in line or 't.me/' in line:
             continue
 
-        clean = strip_date_prefix(clean)
-        clean = remove_duplicates(clean)
-        clean = cut_repeated_tail(clean)
-        clean = clean.strip(' .,\u2013')
+        # Убираем эмодзи
+        line = EMOJI_RE.sub('', line).strip()
 
-        if len(clean) < 10:
-            continue
-        if re.match(r'^\d{1,2}[.\-:\s]', clean):
-            continue
-        if re.match(r'^[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+$', clean):
+        # Ищем 'ДД Мес, ЧЧ:ММГород' и берём всё после
+        m = re.search(
+            r'\d{1,2}\s+[а-яёА-ЯЁ]{3,}[,\s]+\d{1,2}:\d{2}\s*[А-ЯЁ][а-яё]*\s*',
+            line
+        )
+        title = line[m.end():].strip() if m else line.strip()
+
+        if len(title) < 5:
             continue
 
-        return clean[:120]
+        # Убираем полный дубль: 'TitleTitle' -> 'Title'
+        for split in range(10, len(title) // 2 + 1):
+            if title[split:].startswith(title[:split]):
+                title = title[:split]
+                break
+
+        # Убираем хвост если после [.!?] идёт повтор начала
+        for m2 in re.finditer(r'[.!?]\s*', title):
+            tail = title[m2.end():]
+            if len(tail) > 5 and title.startswith(tail[:min(15, len(tail))]):
+                title = title[:m2.end()]
+                break
+
+        title = title.strip(' .,\u2013')
+
+        # Пропускаем если осталась дата или имя автора
+        if re.match(r'^\d{1,2}[.\-:\s]', title):
+            continue
+        if re.match(r'^[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+$', title):
+            continue
+        if len(title) < 5:
+            continue
+
+        return title[:120]
     return None
 
 
-# ──────────────────────────────────────────────
-# ФИЛЬТРЫ
-# ──────────────────────────────────────────────
+def extract_title(text: str) -> Optional[str]:
+    """Обёртка для совместимости."""
+    return get_clean_title(text)
 
-def is_real_event(text: str) -> bool:
-    t = text.lower()
-    return any(w in t for w in EVENT_WORDS) and not any(w in t for w in NOT_EVENT_WORDS)
-
-
-def is_site_trash(title: str) -> bool:
-    t = title.lower()
-    return any(s in t for s in SITE_STOP_WORDS)
-
-
-# ──────────────────────────────────────────────
-# ПАМЯТЬ ОШИБОК
-# ──────────────────────────────────────────────
-
-ERRORS_FILE = "grammar_errors.json"
-
-def load_error_memory() -> List[str]:
-    """Загружает историю исправленных ошибок из файла."""
-    if os.path.exists(ERRORS_FILE):
-        try:
-            with open(ERRORS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return []
-
-def save_error_memory(errors: List[str]):
-    """Сохраняет историю ошибок (не более 50 последних)."""
-    try:
-        with open(ERRORS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(errors[-50:], f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.error(f"Ошибка сохранения памяти: {e}")
-
-
-# ──────────────────────────────────────────────
-# AI ИСПРАВЛЕНИЕ ТЕКСТА
-# ──────────────────────────────────────────────
-
-CLAUDE_API_KEY = os.getenv('CLAUDE_API_KEY', '')
-
-async def ai_fix_text(title: str, session: aiohttp.ClientSession) -> tuple[str, List[str]]:
-    """
-    Исправляет заголовок через Claude API.
-    Возвращает (исправленный текст, список новых ошибок для памяти).
-    Если API недоступен — возвращает оригинал.
-    """
-    if not CLAUDE_API_KEY:
-        return title, []
-
-    error_memory = load_error_memory()
-    memory_block = ""
-    if error_memory:
-        memory_block = "\n\nРанее исправленные ошибки (не повторяй их):\n" + "\n".join(
-            f"- {e}" for e in error_memory[-20:]
-        )
-
-    prompt = f"""Исправь грамматику и пунктуацию в заголовке новости. Правила:
-1. Только исправляй ошибки — не перефразируй
-2. Расставь запятые где нужно
-3. Заглавные буквы в начале
-4. Верни JSON: {{"fixed": "исправленный текст", "errors": ["ошибка1", "ошибка2"]}}
-5. Если ошибок нет — верни тот же текст и пустой список errors{memory_block}
-
-Заголовок: {title}"""
-
-    try:
-        async with session.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": CLAUDE_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 200,
-                "messages": [{"role": "user", "content": prompt}]
-            },
-            timeout=10
-        ) as resp:
-            if resp.status != 200:
-                return title, []
-            data = await resp.json()
-            raw = data['content'][0]['text'].strip()
-            raw = re.sub(r'^```json|```$', '', raw, flags=re.MULTILINE).strip()
-            result = json.loads(raw)
-            fixed = result.get('fixed', title)
-            new_errors = result.get('errors', [])
-
-            # Сохраняем новые ошибки в память
-            if new_errors:
-                memory = load_error_memory()
-                memory.extend(new_errors)
-                save_error_memory(memory)
-                logger.info(f"📝 Исправлено ошибок: {len(new_errors)} — {new_errors}")
-
-            return fixed, new_errors
-    except Exception as e:
-        logger.warning(f"AI коррекция недоступна: {e}")
-        return title, []
-
-
-# ──────────────────────────────────────────────
-# ПОСТ
-# ──────────────────────────────────────────────
 
 def make_post(event: Dict) -> str:
     """
-    Формат поста (4–5 строк):
-    🎯 Что: <название>
-    🌍 Страна / 🏙 Город / 📍 Место
+    Формат (4-5 строк):
+    🎯 Название
+    🇰🇿 Страна, 🏙 Город
+    📍 Место (если есть)
     📅 Дата и время
     🔗 Ссылка на оригинал
     """
@@ -392,33 +287,23 @@ def make_post(event: Dict) -> str:
     location = event.get('location', '')
     venue = event.get('venue', '')
 
-    # Строка 1 — что проходит
-    lines = [f"🎯 <b>{title}</b>"]
+    lines = [f"\U0001f3af <b>{title}</b>"]
 
-    # Строка 2 — страна + город
     if location in ('Онлайн', 'Онлайн (Zoom)'):
-        lines.append(f"🌐 Онлайн")
+        lines.append("\U0001f310 Онлайн")
     elif location:
-        lines.append(f"🇰🇿 Казахстан, 🏙 {location}")
+        lines.append(f"\U0001f1f0\U0001f1ff Казахстан, \U0001f3d9 {location}")
     else:
-        lines.append(f"🇰🇿 Казахстан")
+        lines.append("\U0001f1f0\U0001f1ff Казахстан")
 
-    # Строка 3 — место (если есть)
     if venue:
-        lines.append(f"📍 {venue}")
+        lines.append(f"\U0001f4cd {venue}")
 
-    # Строка 4 — дата и время
-    lines.append(f"📅 {event['date']}")
-
-    # Строка 5 — ссылка на оригинальную новость
-    lines.append(f"🔗 <a href='{event['link']}'>Читать →</a>")
+    lines.append(f"\U0001f4c5 {event['date']}")
+    lines.append(f"\U0001f517 <a href=\'{event['link']}\'>Читать \u2192</a>")
 
     return "\n".join(lines)
 
-
-# ──────────────────────────────────────────────
-# БОТ
-# ──────────────────────────────────────────────
 
 class EventBot:
     def __init__(self):
@@ -544,8 +429,8 @@ class EventBot:
 
                 text = text_div.get_text(separator='\n', strip=True)
 
-                # Разбиваем склеенный текст вида "09 Фев, 17:00ШымкентTitle"
-                # Вставляем перенос между ЧЧ:ММ+Город и заголовком
+                # Вставляем перенос между ЧЧ:ММГород и заголовком
+                # '17:00АлматыTitle' -> '17:00 Алматы\nTitle'
                 text = re.sub(
                     r'(\d{1,2}:\d{2})([А-ЯЁ][а-яё]+)([А-ЯЁA-Za-z])',
                     r'\1 \2\n\3',
@@ -594,19 +479,6 @@ class EventBot:
                 title = extract_title(text)
                 if not title:
                     logger.info(f"\u23ed\ufe0f Нет заголовка: {text[:50].strip()}")
-                    continue
-                # Если заголовок — имя автора (Имя Фамилия), ищем тему в следующих строках
-                if re.match(r'^[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+$', title.strip()):
-                    lines_all = text.strip().split('\n')
-                    title = None
-                    for ln in lines_all[1:]:
-                        ln_c = strip_emoji(ln).strip()
-                        if len(ln_c) > 15 and not re.match(r'^\d', ln_c) and 'http' not in ln_c:
-                            if not re.match(r'^[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+$', ln_c):
-                                title = ln_c[:120]
-                                break
-                if not title:
-                    logger.info(f"\u23ed\ufe0f Только автор, нет темы: {text[:50].strip()}")
                     continue
 
                 time_m = re.search(r'(?:в\s+)(\d{1,2}:\d{2})', text)
@@ -746,11 +618,6 @@ async def main():
 
         posted = 0
         for event in unique[:15]:
-            # AI исправление заголовка (с памятью ошибок)
-            if CLAUDE_API_KEY:
-                fixed_title, _ = await ai_fix_text(event['title'], bot_obj.session or await bot_obj.get_session())
-                event['title'] = fixed_title
-
             text = make_post(event)
             if not text:
                 continue
