@@ -272,57 +272,28 @@ def make_post(event: Dict) -> str:
     title = (event.get('title') or '').strip()
     if not title or len(title) < 5:
         return ""
-
     if not event.get('date'):
         return ""
 
-    location = event.get('location', '').strip()
-    venue = event.get('venue', '').strip()
+    location = event.get('location', '')
+    venue = event.get('venue', '')
 
-    # ───────────────────────────────
-    # Разделяем title на заголовок и возможное описание
-    # (часто в title уже слипается название + начало текста)
-    # ───────────────────────────────
-    title_lines = title.split('\n', 1)
-    main_title = title_lines[0].strip()
+    lines = [f"\U0001f3af <b>{title}</b>"]
 
-    description = ""
-    if len(title_lines) > 1:
-        description = title_lines[1].strip()
-
-    # Если описание очень короткое или выглядит как мусор — убираем
-    if description and len(description) < 15:
-        description = ""
-
-    # ───────────────────────────────
-    # Формируем сообщение
-    # ───────────────────────────────
-    parts = []
-
-    # Основной заголовок жирным
-    parts.append(f"🎯 <b>{main_title}</b>")
-
-    # Описание (если есть и выглядит осмысленно)
-    if description:
-        parts.append(description)
-
-    # Метаданные отдельно
-    if location:
-        if location in ('Онлайн', 'Онлайн (Zoom)'):
-            parts.append("🌐 Онлайн")
-        else:
-            parts.append(f"🇰🇿 Казахстан, 🏙 {location}")
+    if location in ('Онлайн', 'Онлайн (Zoom)'):
+        lines.append("\U0001f310 Онлайн")
+    elif location:
+        lines.append(f"\U0001f1f0\U0001f1ff Казахстан, \U0001f3d9 {location}")
     else:
-        parts.append("🇰🇿 Казахстан")
+        lines.append("\U0001f1f0\U0001f1ff Казахстан")
 
     if venue:
-        parts.append(f"📍 {venue}")
+        lines.append(f"\U0001f4cd {venue}")
 
-    parts.append(f"📅 {event['date']}")
+    lines.append(f"\U0001f4c5 {event['date']}")
+    lines.append(f"\U0001f517 <a href='{event['link']}'>Читать \u2192</a>")
 
-    parts.append(f"🔗 <a href='{event['link']}'>Читать →</a>")
-
-    return "\n".join(parts)
+    return "\n".join(lines)
 
 
 class EventBot:
