@@ -9,10 +9,7 @@ from telegram import Bot
 import re
 import json
 
-logging.basicConfig(
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -57,28 +54,22 @@ MONTHS_SHORT = {
     'сен': 9, 'окт': 10, 'ноя': 11, 'дек': 12,
 }
 
-# Пост берём ТОЛЬКО если есть хотя бы одно из этих слов
 EVENT_WORDS = [
     'конференция', 'conference', 'форум', 'forum', 'summit', 'саммит',
-    'meetup', 'митап', 'хакатон', 'hackathon',
-    'воркшоп', 'workshop', 'мастер-класс', 'masterclass',
-    'вебинар', 'webinar', 'семинар',
-    'pitch', 'питч', 'demo day',
-    'акселератор', 'accelerator', 'bootcamp', 'буткемп',
-    'выставка', 'конкурс', 'competition',
-    'тренинг', 'training',
-    'мероприятие', 'ивент', 'event',
+    'meetup', 'митап', 'хакатон', 'hackathon', 'воркшоп', 'workshop',
+    'мастер-класс', 'masterclass', 'вебинар', 'webinar', 'семинар',
+    'pitch', 'питч', 'demo day', 'акселератор', 'accelerator',
+    'bootcamp', 'буткемп', 'выставка', 'конкурс', 'competition',
+    'тренинг', 'training', 'мероприятие', 'ивент', 'event',
     'приглашает', 'приглашаем', 'зарегистрируйся', 'регистрация',
 ]
 
-# Пост ВЫБРАСЫВАЕМ если есть хотя бы одно из этих слов
 NOT_EVENT_WORDS = [
     'research', 'исследование показало', 'инвестировал', 'привлек раунд',
     'млн $', 'млрд $', 'назначен', 'уволен', 'отчет', 'выручка',
     'курс доллара', 'биржа', 'акции', 'токаев', 'правительство приняло',
 ]
 
-# Навигационный мусор с сайтов
 SITE_STOP_WORDS = [
     'контакты', 'о нас', 'политика', 'войти', 'регистрация аккаунта',
     'подписаться', 'поиск', 'главная', 'меню', 'все новости',
@@ -94,14 +85,8 @@ KZ_CITIES = {
     'ташкент': 'Ташкент, Узбекистан',
 }
 
-# Эмодзи-регулярка — НЕ трогает кириллицу
 EMOJI_RE = re.compile(
-    '[\U00010000-\U0010ffff'
-    '\u2600-\u27ff'
-    '\u2300-\u23ff'
-    '\u25a0-\u25ff'
-    '\u2B00-\u2BFF'
-    ']',
+    '[\U00010000-\U0010ffff\u2600-\u27ff\u2300-\u23ff\u25a0-\u25ff\u2B00-\u2BFF]',
     re.UNICODE
 )
 
@@ -109,10 +94,6 @@ EMOJI_RE = re.compile(
 def strip_emoji(s: str) -> str:
     return EMOJI_RE.sub('', s).strip()
 
-
-# ──────────────────────────────────────────────
-# ДАТА
-# ──────────────────────────────────────────────
 
 def parse_date(text: str) -> Optional[datetime]:
     t = text.lower()
@@ -177,10 +158,6 @@ def format_date(dt: datetime, time_str: str = None) -> str:
     return result
 
 
-# ──────────────────────────────────────────────
-# МЕСТО
-# ──────────────────────────────────────────────
-
 def extract_location(text: str) -> Optional[str]:
     t = text.lower()
     for key, value in KZ_CITIES.items():
@@ -206,38 +183,33 @@ def extract_venue(text: str) -> Optional[str]:
     return None
 
 
-# ──────────────────────────────────────────────
-# ЗАГОЛОВОК
-# ──────────────────────────────────────────────
-
-
 def get_clean_title(text: str) -> Optional[str]:
     """
-    Главная функция получения заголовка.
-    Находит 'ДД Мес, ЧЧ:ММГород' и берёт ВСЁ ПОСЛЕ — это название события.
-    Убирает дубли и хвостовой мусор.
+    1. Ищет 'ДД Мес, ЧЧ:ММ' в строке
+    2. Берёт всё ПОСЛЕ
+    3. Пропускает город (заглавное кирилл-слово сразу после времени)
+    4. Убирает дубли и хвостовые повторы
     """
     for line in text.strip().split('\n'):
-        line = line.strip()
-        if len(line) < 10:
-            continue
-        if 'http' in line or 't.me/' in line:
-            continue
-
-        # Убираем эмодзи
         line = EMOJI_RE.sub('', line).strip()
+        if len(line) < 10 or 'http' in line or 't.me/' in line:
+            continue
 
-        # Ищем 'ДД Мес, ЧЧ:ММГород' и берём всё после
-        m = re.search(
-            r'\d{1,2}\s+[а-яёА-ЯЁ]{3,}[,\s]+\d{1,2}:\d{2}\s*[А-ЯЁ][а-яё]*\s*',
-            line
-        )
-        title = line[m.end():].strip() if m else line.strip()
+        m = re.search(r'\d{1,2}\s+[а-яёА-ЯЁ]{3,}[,\s]+\d{1,2}:\d{2}', line)
+        if m:
+            after = line[m.end():].strip()
+            # Пропускаем город — кирилл-слово сразу после времени
+            city_m = re.match(r'^[А-ЯЁ][а-яё]+\s*', after)
+            if city_m:
+                after = after[city_m.end():].strip()
+            title = after
+        else:
+            title = line
 
         if len(title) < 5:
             continue
 
-        # Убираем полный дубль: 'TitleTitle' -> 'Title'
+        # Убираем полный дубль 'TitleTitle' -> 'Title'
         for split in range(10, len(title) // 2 + 1):
             if title[split:].startswith(title[:split]):
                 title = title[:split]
@@ -252,12 +224,11 @@ def get_clean_title(text: str) -> Optional[str]:
 
         title = title.strip(' .,\u2013')
 
-        # Пропускаем если осталась дата или имя автора
+        if len(title) < 5:
+            continue
         if re.match(r'^\d{1,2}[.\-:\s]', title):
             continue
         if re.match(r'^[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+$', title):
-            continue
-        if len(title) < 5:
             continue
 
         return title[:120]
@@ -265,19 +236,20 @@ def get_clean_title(text: str) -> Optional[str]:
 
 
 def extract_title(text: str) -> Optional[str]:
-    """Обёртка для совместимости."""
     return get_clean_title(text)
 
 
+def is_real_event(text: str) -> bool:
+    t = text.lower()
+    return any(w in t for w in EVENT_WORDS) and not any(w in t for w in NOT_EVENT_WORDS)
+
+
+def is_site_trash(title: str) -> bool:
+    t = title.lower()
+    return any(s in t for s in SITE_STOP_WORDS)
+
+
 def make_post(event: Dict) -> str:
-    """
-    Формат (4-5 строк):
-    🎯 Название
-    🇰🇿 Страна, 🏙 Город
-    📍 Место (если есть)
-    📅 Дата и время
-    🔗 Ссылка на оригинал
-    """
     title = (event.get('title') or '').strip()
     if not title or len(title) < 5:
         return ""
@@ -300,7 +272,7 @@ def make_post(event: Dict) -> str:
         lines.append(f"\U0001f4cd {venue}")
 
     lines.append(f"\U0001f4c5 {event['date']}")
-    lines.append(f"\U0001f517 <a href=\'{event['link']}\'>Читать \u2192</a>")
+    lines.append(f"\U0001f517 <a href='{event['link']}'>Читать \u2192</a>")
 
     return "\n".join(lines)
 
@@ -428,14 +400,6 @@ class EventBot:
                     continue
 
                 text = text_div.get_text(separator='\n', strip=True)
-
-                # Вставляем перенос между ЧЧ:ММГород и заголовком
-                # '17:00АлматыTitle' -> '17:00 Алматы\nTitle'
-                text = re.sub(
-                    r'(\d{1,2}:\d{2})([А-ЯЁ][а-яё]+)([А-ЯЁA-Za-z])',
-                    r'\1 \2\n\3',
-                    text
-                )
                 if len(text) < 30:
                     continue
 
@@ -454,9 +418,7 @@ class EventBot:
                     if m:
                         image_url = m.group(1)
 
-                is_digest = bool(re.search(
-                    r'\d{1,2}[.\-]\d{2}\s+(?:в\s+)?\d{1,2}:\d{2}', text
-                ))
+                is_digest = bool(re.search(r'\d{1,2}[.\-]\d{2}\s+(?:в\s+)?\d{1,2}:\d{2}', text))
 
                 if is_digest:
                     events = self.parse_digest(text, post_link, channel['name'], image_url)
@@ -464,24 +426,22 @@ class EventBot:
                     logger.info(f"\U0001f4cb Дайджест {channel['name']}: {len(events)} событий")
                     continue
 
-                # Фильтр 1: ключевые слова
                 if not is_real_event(text):
                     logger.info(f"\u23ed\ufe0f Не ивент: {text[:50].strip()}")
                     continue
 
-                # Фильтр 2: дата в будущем
                 dt = parse_date(text)
                 if not is_future(dt):
                     logger.info(f"\u23ed\ufe0f {'Прошедшее' if dt else 'Нет даты'}: {text[:50].strip()}")
                     continue
 
-                # Фильтр 3: заголовок отдельно от даты
-                title = extract_title(text)
+                title = get_clean_title(text)
                 if not title:
                     logger.info(f"\u23ed\ufe0f Нет заголовка: {text[:50].strip()}")
                     continue
 
-                time_m = re.search(r'(?:в\s+)(\d{1,2}:\d{2})', text)
+                # Время из строки с датой
+                time_m = re.search(r'\d{1,2}\s+[а-яёА-ЯЁ]{3,}[,\s]+(\d{1,2}:\d{2})', text)
                 time_str = time_m.group(1) if time_m else None
 
                 all_events.append({
@@ -522,12 +482,8 @@ class EventBot:
                     continue
                 if href in self.posted:
                     continue
-
-                # Навигационный мусор
                 if is_site_trash(title_raw):
                     continue
-
-                # Ивент-слова
                 if not is_real_event(title_raw):
                     continue
 
@@ -535,7 +491,6 @@ class EventBot:
                 context = parent.get_text(separator=' ', strip=True) if parent else title_raw
                 dt = parse_date(context)
 
-                # Только будущие
                 if not is_future(dt):
                     continue
 
@@ -590,10 +545,6 @@ class EventBot:
 
         return all_events
 
-
-# ──────────────────────────────────────────────
-# MAIN
-# ──────────────────────────────────────────────
 
 async def main():
     logger.info("\U0001f680 Старт...")
