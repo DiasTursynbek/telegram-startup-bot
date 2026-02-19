@@ -81,6 +81,7 @@ KZ_CITIES = {
     'нур-султан': 'Астана', 'усть-каменогорск': 'Усть-Каменогорск',
     'кызылорда': 'Кызылорда', 'актобе': 'Актобе', 'тараз': 'Тараз',
     'павлодар': 'Павлодар', 'семей': 'Семей', 'атырау': 'Атырау',
+    'жезказган': 'Жезқазған', 'жезқазған': 'Жезқазған',
     'онлайн': 'Онлайн', 'online': 'Онлайн', 'zoom': 'Онлайн (Zoom)',
     'ташкент': 'Ташкент, Узбекистан',
 }
@@ -90,6 +91,26 @@ EMOJI_RE = re.compile(
     re.UNICODE
 )
 
+# ─── Claude error memory: помним паттерны ошибок и не повторяем ─────────────
+_bad_patterns: List[str] = []
+
+
+def remember_bad_pattern(text: str):
+    """Запоминаем паттерн приклеенного текста чтобы пропускать в будущем."""
+    # Берём первые 30 символов как «отпечаток»
+    key = re.sub(r'\s+', ' ', text[:30].lower()).strip()
+    if key and key not in _bad_patterns:
+        _bad_patterns.append(key)
+        if len(_bad_patterns) > 100:
+            _bad_patterns.pop(0)
+
+
+def matches_bad_pattern(text: str) -> bool:
+    key = re.sub(r'\s+', ' ', text[:30].lower()).strip()
+    return any(key.startswith(p[:20]) for p in _bad_patterns)
+
+
+# ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def strip_emoji(s: str) -> str:
     return EMOJI_RE.sub('', s).strip()
@@ -168,7 +189,7 @@ def extract_location(text: str) -> Optional[str]:
 
 def extract_venue(text: str) -> Optional[str]:
     venues = [
-        'Narxoz', 'Nazarbayev', 'KBTU', 'KБТУ', 'Astana Hub',
+        'Narxoz', 'Nazarbayev', 'KBTU', 'КБТУ', 'Astana Hub',
         'IT Park', 'MOST IT Hub', 'Holiday Inn', 'Esentai',
         'Yandex', 'Smart Point', 'Almaty Arena',
     ]
@@ -183,84 +204,9 @@ def extract_venue(text: str) -> Optional[str]:
     return None
 
 
-def get_clean_title(text: str) -> Optional[str]:
-    """
-    1. Ищет 'ДД Мес, ЧЧ:ММ' в строке
-    2. Берёт всё ПОСЛЕ
-    3. Пропускает город (заглавное кирилл-слово сразу после времени)
-    4. Убирает дубли и хвостовые повторы
-    """
-    for line in text.strip().split('\n'):
-        line = EMOJI_RE.sub('', line).strip()
-        if len(line) < 10 or 'http' in line or 't.me/' in line:
-            continue
-
-        m = re.search(r'\d{1,2}\s+[а-яёА-ЯЁ]{3,}[,\s]+\d{1,2}:\d{2}', line)
-        if m:
-            after = line[m.end():].strip()
-            # Пропускаем город — кирилл-слово сразу после времени
-            city_m = re.match(r'^[А-ЯЁ][а-яё]+\s*', after)
-            if city_m:
-                after = after[city_m.end():].strip()
-            title = after
-        else:
-            title = line
-
-        if len(title) < 5:
-            continue
-
-        # Убираем полный дубль 'TitleTitle' -> 'Title'
-        for split in range(10, len(title) // 2 + 1):
-            if title[split:].startswith(title[:split]):
-                title = title[:split]
-                break
-
-        # Убираем хвост если после [.!?] идёт повтор начала
-        for m2 in re.finditer(r'[.!?]\s*', title):
-            tail = title[m2.end():]
-            if len(tail) > 5 and title.startswith(tail[:min(15, len(tail))]):
-                title = title[:m2.end()]
-                break
-
-        title = title.strip(' .,\u2013')
-
-        if len(title) < 5:
-            continue
-        if re.match(r'^\d{1,2}[.\-:\s]', title):
-            continue
-        if re.match(r'^[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+$', title):
-            continue
-
-        return title[:120]
-    return None
-
-
-def extract_title(text: str) -> Optional[str]:
-    return get_clean_title(text)
-
-
 def is_real_event(text: str) -> bool:
     t = text.lower()
     return any(w in t for w in EVENT_WORDS) and not any(w in t for w in NOT_EVENT_WORDS)
-
-
-def has_glued_date(text: str) -> bool:
-    """
-    Возвращает True если текст содержит приклеенную дату+город+текст
-    Паттерн: '20 Фев, 10:00Атырау...' или '09 Фев, 17:00Шымкент...'
-    Такие посты пропускаем — их заголовок не парсится нормально.
-    """
-    first_line = ''
-    for line in text.strip().split('\n'):
-        line = EMOJI_RE.sub('', line).strip()
-        if len(line) > 10:
-            first_line = line
-            break
-    # Паттерн: ДД Мес, ЧЧ:ММ + сразу текст (город или заголовок без пробела)
-    return bool(re.search(
-        r'\d{1,2}\s+[а-яёА-ЯЁ]{3,}[,\s]+\d{1,2}:\d{2}[А-ЯЁA-Za-z]',
-        first_line
-    ))
 
 
 def is_site_trash(title: str) -> bool:
@@ -268,7 +214,134 @@ def is_site_trash(title: str) -> bool:
     return any(s in t for s in SITE_STOP_WORDS)
 
 
+# ─── Парсинг приклеенной строки "09 Фев, 17:00Шымкент Название" ─────────────
+
+def parse_glued_line(line: str) -> Optional[Dict]:
+    """
+    Разбирает строку вида '09 Фев, 17:00Шымкент Pre-incubation Bootcamp'
+    Возвращает dict {date_raw, time_str, city, title} или None.
+    """
+    line = strip_emoji(line).strip()
+
+    # Паттерн: ДД Мес[,] ЧЧ:ММ[Город]Заголовок
+    m = re.match(
+        r'^(\d{1,2})\s+([А-ЯЁа-яёA-Za-z]{3,})[,\s]+(\d{1,2}:\d{2})'  # дата + время
+        r'([А-ЯЁ][а-яё]+(?:\s[А-ЯЁ][а-яё]+)?)?'                       # опц. город
+        r'\s*(.+)$',                                                     # заголовок
+        line
+    )
+    if not m:
+        return None
+
+    day_raw = m.group(1)
+    month_raw = m.group(2).lower()[:3]
+    time_str = m.group(3)
+    possible_city = (m.group(4) or '').strip()
+    title_raw = m.group(5).strip()
+
+    month_num = MONTHS_SHORT.get(month_raw, 0)
+    if not month_num:
+        # Попробуем полное название
+        for k, v in MONTHS_RU.items():
+            if m.group(2).lower().startswith(k[:3]):
+                month_num = v
+                break
+    if not month_num:
+        return None
+
+    year = datetime.now().year
+    try:
+        dt = datetime(year, month_num, int(day_raw))
+        if dt.date() < datetime.now().date():
+            dt = datetime(year + 1, month_num, int(day_raw))
+    except Exception:
+        return None
+
+    # Если possible_city — реальный город
+    city = None
+    if possible_city:
+        city_key = possible_city.lower()
+        city = KZ_CITIES.get(city_key)
+
+    # Чистим заголовок от явных дублей
+    if len(title_raw) > 10:
+        half = len(title_raw) // 2
+        if title_raw[:half].strip() == title_raw[half:].strip():
+            title_raw = title_raw[:half].strip()
+
+    if len(title_raw) < 5:
+        return None
+
+    return {
+        'dt': dt,
+        'time_str': time_str,
+        'city': city or (possible_city if possible_city else None),
+        'title': title_raw[:120],
+        'date_formatted': format_date(dt, time_str),
+    }
+
+
+# ─── Claude API: очистка и валидация заголовка ───────────────────────────────
+
+async def claude_clean_title(raw_text: str, session: aiohttp.ClientSession) -> Optional[str]:
+    """
+    Отправляем сырой текст поста в Claude.
+    Claude возвращает ТОЛЬКО чистый заголовок события (1 строка) или 'SKIP'.
+    Если 'SKIP' — запоминаем паттерн и пропускаем пост.
+    """
+    if not CLAUDE_API_KEY:
+        return None
+
+    prompt = (
+        "Из текста ниже извлеки ТОЛЬКО название мероприятия (конференции, митапа, хакатона и т.д.).\n"
+        "Правила:\n"
+        "- Верни ОДНУ строку — только название, без даты, города, ссылок\n"
+        "- Если название слипшееся (напр. 'BootcampЕсть идея'), разбей пробелом\n"
+        "- Если дубль в названии (напр. 'Data CommunityData Community'), убери повтор\n"
+        "- Если это не мероприятие или нельзя извлечь нормальное название — ответь: SKIP\n"
+        "- Не добавляй ничего лишнего, только название\n\n"
+        f"Текст:\n{raw_text[:600]}"
+    )
+
+    try:
+        async with session.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": CLAUDE_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 80,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=10,
+        ) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+            result = data["content"][0]["text"].strip()
+            if result.upper() == "SKIP" or len(result) < 5:
+                remember_bad_pattern(raw_text)
+                return None
+            return result[:120]
+    except Exception as e:
+        logger.error(f"Claude API error: {e}")
+        return None
+
+
+# ─── Форматирование поста (4-5 строк) ────────────────────────────────────────
+
 def make_post(event: Dict) -> str:
+    """
+    Формат:
+    🎯 Название
+    🇰🇿 Казахстан[, 🏙 Город]
+    📍 Место (если есть)
+    📅 Дата[, время]
+    🔗 Читать →
+    """
     title = (event.get('title') or '').strip()
     if not title or len(title) < 5:
         return ""
@@ -278,30 +351,32 @@ def make_post(event: Dict) -> str:
     location = event.get('location', '')
     venue = event.get('venue', '')
 
-    lines = [f"\U0001f3af <b>{title}</b>"]
+    lines = [f"🎯 <b>{title}</b>"]
 
     if location in ('Онлайн', 'Онлайн (Zoom)'):
-        lines.append("\U0001f310 Онлайн")
+        lines.append("🌐 Онлайн")
     elif location:
-        lines.append(f"\U0001f1f0\U0001f1ff Казахстан, \U0001f3d9 {location}")
+        lines.append(f"🇰🇿 Казахстан, 🏙 {location}")
     else:
-        lines.append("\U0001f1f0\U0001f1ff Казахстан")
+        lines.append("🇰🇿 Казахстан")
 
     if venue:
-        lines.append(f"\U0001f4cd {venue}")
+        lines.append(f"📍 {venue}")
 
-    lines.append(f"\U0001f4c5 {event['date']}")
-    lines.append(f"\U0001f517 <a href='{event['link']}'>Читать \u2192</a>")
+    lines.append(f"📅 {event['date']}")
+    lines.append(f"🔗 <a href='{event['link']}'>Читать →</a>")
 
     return "\n".join(lines)
 
+
+# ─── Основной бот ─────────────────────────────────────────────────────────────
 
 class EventBot:
     def __init__(self):
         self.session = None
         self.posted = set()
 
-    async def get_session(self):
+    async def get_session(self) -> aiohttp.ClientSession:
         if not self.session:
             self.session = aiohttp.ClientSession(headers={'User-Agent': 'Mozilla/5.0'})
         return self.session
@@ -318,6 +393,8 @@ class EventBot:
         except Exception as e:
             logger.error(f"Ошибка: {url} - {e}")
             return ""
+
+    # ── Парсинг дайджест-постов ──────────────────────────────────────────────
 
     def parse_digest(self, text: str, post_link: str, source: str, image_url: str) -> List[Dict]:
         events = []
@@ -347,7 +424,7 @@ class EventBot:
             if time_match:
                 rest = (rest[:time_match.start()] + rest[time_match.end():]).strip()
 
-            title_raw = strip_emoji(rest).strip(' -\u2013\u2022')
+            title_raw = strip_emoji(rest).strip(' -–•')
 
             link = None
             lm = re.search(r'((?:https?://|t\.me/)\S+)', line)
@@ -382,7 +459,6 @@ class EventBot:
 
             dt = parse_date(date_raw)
             if not is_future(dt):
-                logger.info(f"\u23ed\ufe0f Прошедшее: {title_raw[:40]} ({date_raw})")
                 i += 1
                 continue
 
@@ -403,6 +479,8 @@ class EventBot:
             i += 1
         return events
 
+    # ── Парсинг Telegram-канала ──────────────────────────────────────────────
+
     async def parse_channel(self, channel: Dict) -> List[Dict]:
         url = f"https://t.me/s/{channel['username']}"
         html = await self.fetch(url)
@@ -411,6 +489,7 @@ class EventBot:
 
         soup = BeautifulSoup(html, 'html.parser')
         all_events = []
+        session = await self.get_session()
 
         for msg in soup.find_all('div', class_='tgme_widget_message')[:20]:
             try:
@@ -429,6 +508,11 @@ class EventBot:
                     continue
                 self.posted.add(post_link)
 
+                # Пропускаем ранее запомненные плохие паттерны
+                if matches_bad_pattern(text):
+                    logger.info(f"⏭️ Плохой паттерн (из памяти): {text[:50].strip()}")
+                    continue
+
                 image_url = None
                 img_div = msg.find('a', class_='tgme_widget_message_photo_wrap')
                 if img_div:
@@ -442,29 +526,94 @@ class EventBot:
                 if is_digest:
                     events = self.parse_digest(text, post_link, channel['name'], image_url)
                     all_events.extend(events)
-                    logger.info(f"\U0001f4cb Дайджест {channel['name']}: {len(events)} событий")
+                    logger.info(f"📋 Дайджест {channel['name']}: {len(events)} событий")
                     continue
 
                 if not is_real_event(text):
-                    logger.info(f"\u23ed\ufe0f Не ивент: {text[:50].strip()}")
+                    logger.info(f"⏭️ Не ивент: {text[:50].strip()}")
                     continue
 
-                # Пропускаем если дата приклеена к тексту — не можем нормально распарсить
-                if has_glued_date(text):
-                    logger.info(f"\u23ed\ufe0f Приклеенная дата, пропуск: {text[:50].strip()}")
+                # ── Попытка разобрать приклеенную дату ──────────────────────
+                first_line = ''
+                for ln in text.strip().split('\n'):
+                    clean = strip_emoji(ln).strip()
+                    if len(clean) > 10:
+                        first_line = clean
+                        break
+
+                glued_data = None
+                has_glue = bool(re.search(
+                    r'\d{1,2}\s+[А-ЯЁа-яёA-Za-z]{3,}[,\s]+\d{1,2}:\d{2}[А-ЯЁA-Za-z]',
+                    first_line
+                ))
+
+                if has_glue:
+                    glued_data = parse_glued_line(first_line)
+                    if not glued_data:
+                        # Не смогли разобрать — запоминаем паттерн и пропускаем
+                        remember_bad_pattern(text)
+                        logger.info(f"⏭️ Не смогли разобрать приклеенную дату, пропуск: {first_line[:60]}")
+                        continue
+
+                # ── Если приклеенная дата разобрана ─────────────────────────
+                if glued_data:
+                    title = glued_data['title']
+                    dt = glued_data['dt']
+                    time_str = glued_data['time_str']
+                    location = glued_data['city'] or extract_location(text) or ''
+
+                    # Если заголовок всё ещё выглядит мусорно — чистим через Claude
+                    looks_dirty = (
+                        re.search(r'[А-ЯЁ]{2,}[a-zA-Z]', title) or  # КириллицаLatinСлипшееся
+                        len(title) > 80 or
+                        title.count(' ') < 1
+                    )
+                    if looks_dirty and CLAUDE_API_KEY:
+                        clean = await claude_clean_title(text, session)
+                        if clean is None:
+                            logger.info(f"⏭️ Claude сказал SKIP: {title[:50]}")
+                            continue
+                        title = clean
+
+                    if not is_future(dt):
+                        continue
+
+                    all_events.append({
+                        'title': title,
+                        'date': format_date(dt, time_str),
+                        'location': location,
+                        'venue': extract_venue(text),
+                        'link': post_link,
+                        'source': channel['name'],
+                        'image_url': image_url,
+                    })
                     continue
 
+                # ── Обычный пост без приклеенной даты ───────────────────────
                 dt = parse_date(text)
                 if not is_future(dt):
-                    logger.info(f"\u23ed\ufe0f {'Прошедшее' if dt else 'Нет даты'}: {text[:50].strip()}")
+                    logger.info(f"⏭️ {'Прошедшее' if dt else 'Нет даты'}: {text[:50].strip()}")
                     continue
 
-                title = get_clean_title(text)
+                # Извлекаем заголовок через Claude если есть ключ, иначе простым парсером
+                title = None
+                if CLAUDE_API_KEY:
+                    title = await claude_clean_title(text, session)
+                    if title is None:
+                        logger.info(f"⏭️ Claude сказал SKIP: {text[:50].strip()}")
+                        continue
+                else:
+                    # Простой fallback: первая длинная строка без даты
+                    for ln in text.split('\n'):
+                        ln = strip_emoji(ln).strip()
+                        if len(ln) > 10 and not re.match(r'^\d{1,2}\s+[а-яё]', ln.lower()):
+                            title = ln[:120]
+                            break
+
                 if not title:
-                    logger.info(f"\u23ed\ufe0f Нет заголовка: {text[:50].strip()}")
+                    logger.info(f"⏭️ Нет заголовка: {text[:50].strip()}")
                     continue
 
-                # Время из строки с датой
                 time_m = re.search(r'\d{1,2}\s+[а-яёА-ЯЁ]{3,}[,\s]+(\d{1,2}:\d{2})', text)
                 time_str = time_m.group(1) if time_m else None
 
@@ -479,10 +628,12 @@ class EventBot:
                 })
 
             except Exception as e:
-                logger.error(f"Ошибка: {e}")
+                logger.error(f"Ошибка парсинга сообщения: {e}")
                 continue
 
         return all_events
+
+    # ── Парсинг сайтов ───────────────────────────────────────────────────────
 
     async def parse_site(self, site: Dict) -> List[Dict]:
         html = await self.fetch(site['url'])
@@ -550,30 +701,34 @@ class EventBot:
 
         return events
 
+    # ── Сбор всех событий ───────────────────────────────────────────────────
+
     async def get_all_events(self) -> List[Dict]:
         all_events = []
 
-        logger.info(f"\U0001f310 Парсинг {len(URLS)} сайтов...")
+        logger.info(f"🌐 Парсинг {len(URLS)} сайтов...")
         for site in URLS:
             events = await self.parse_site(site)
             all_events.extend(events)
             if events:
-                logger.info(f"\u2705 {site['name']}: {len(events)}")
+                logger.info(f"✅ {site['name']}: {len(events)}")
 
-        logger.info(f"\U0001f4f1 Парсинг {len(TELEGRAM_CHANNELS)} Telegram каналов...")
+        logger.info(f"📱 Парсинг {len(TELEGRAM_CHANNELS)} Telegram каналов...")
         for channel in TELEGRAM_CHANNELS:
             events = await self.parse_channel(channel)
             all_events.extend(events)
             if events:
-                logger.info(f"\u2705 {channel['name']}: {len(events)}")
+                logger.info(f"✅ {channel['name']}: {len(events)}")
 
         return all_events
 
 
+# ─── main ─────────────────────────────────────────────────────────────────────
+
 async def main():
-    logger.info("\U0001f680 Старт...")
+    logger.info("🚀 Старт...")
     if not BOT_TOKEN:
-        logger.error("\u274c BOT_TOKEN не найден!")
+        logger.error("❌ BOT_TOKEN не найден!")
         return
 
     bot_obj = EventBot()
@@ -582,6 +737,7 @@ async def main():
     try:
         events = await bot_obj.get_all_events()
 
+        # Дедупликация по заголовку
         unique, seen = [], set()
         for e in events:
             key = e['title'][:40].lower()
@@ -589,7 +745,7 @@ async def main():
                 unique.append(e)
                 seen.add(key)
 
-        logger.info(f"\U0001f4ca Уникальных событий: {len(unique)}")
+        logger.info(f"📊 Уникальных событий: {len(unique)}")
 
         posted = 0
         for event in unique[:15]:
@@ -604,15 +760,16 @@ async def main():
                             message_thread_id=MESSAGE_THREAD_ID,
                             photo=event['image_url'],
                             caption=text,
-                            parse_mode='HTML'
+                            parse_mode='HTML',
                         )
                     except Exception:
+                        # Картинка не загрузилась — шлём без неё
                         await bot.send_message(
                             chat_id=CHANNEL_ID,
                             message_thread_id=MESSAGE_THREAD_ID,
                             text=text,
                             parse_mode='HTML',
-                            disable_web_page_preview=True
+                            disable_web_page_preview=True,
                         )
                 else:
                     await bot.send_message(
@@ -620,15 +777,15 @@ async def main():
                         message_thread_id=MESSAGE_THREAD_ID,
                         text=text,
                         parse_mode='HTML',
-                        disable_web_page_preview=True
+                        disable_web_page_preview=True,
                     )
                 posted += 1
-                logger.info(f"\u2705 ({posted}) {event['title'][:50]}")
+                logger.info(f"✅ ({posted}) {event['title'][:50]}")
                 await asyncio.sleep(2)
             except Exception as e:
-                logger.error(f"\u274c {e}")
+                logger.error(f"❌ {e}")
 
-        logger.info(f"\u2705 Готово! Опубликовано: {posted}")
+        logger.info(f"✅ Готово! Опубликовано: {posted}")
 
     finally:
         await bot_obj.close()
