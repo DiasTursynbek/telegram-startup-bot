@@ -675,12 +675,46 @@ class EventBot:
 
                 le = msg.find("a", class_="tgme_widget_message_date")
                 post_link = le["href"] if le else f"https://t.me/{channel['username']}"
-
                 norm_link = normalize_link(post_link)
+
+# 🔥 ИЩЕМ ПЕРВОИСТОЧНИК В ТЕКСТЕ
+                external_link = None
+                links_in_text = re.findall(r"(https?://[^\s]+)", text)
+
+                for l in links_in_text:
+                    clean_l = normalize_link(l)
+                    if "t.me" not in clean_l:   # исключаем telegram
+                        external_link = clean_l
+                        break
+
+# если нашли внешний источник — используем его
+                final_link = external_link if external_link else norm_link
 
                 # ❗ ПРОВЕРКА ТОЛЬКО ЗДЕСЬ
                 if norm_link in self.posted:
                     continue
+                
+                # 🔥 ИЩЕМ ПЕРВОИСТОЧНИК
+                external_link = None
+
+# 1️⃣ сначала ищем <a href=...>
+                for a in td.find_all("a", href=True):
+                    href = normalize_link(a["href"])
+                    if "t.me" not in href:
+                        external_link = href
+                        break
+
+# 2️⃣ если не нашли — fallback на regex
+                if not external_link:
+                    links_in_text = re.findall(r"(https?://[^\s]+)", text)
+                    for l in links_in_text:
+                        clean_l = normalize_link(l)
+                        if "t.me" not in clean_l:
+                            external_link = clean_l
+                            break
+
+# 3️⃣ выбираем финальную ссылку
+                final_link = external_link if external_link else norm_link
 
                 image_url = None
                 img_div = msg.find("a", class_="tgme_widget_message_photo_wrap")
@@ -723,7 +757,7 @@ class EventBot:
                         "date": format_date(dt, time_str),
                         "location": extract_location(text) or "",
                         "venue": extract_venue(text),
-                        "link": norm_link,
+                        "link": final_link,
                         "source": channel["name"],
                         "image_url": image_url,
                     }
