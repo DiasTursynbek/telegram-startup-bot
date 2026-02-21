@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # нужно для git push
+  contents: write
 
 jobs:
   post:
@@ -14,24 +14,24 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      # 1️⃣ Клонируем репозиторий
+      # 1️⃣ Checkout репозитория
       - name: Checkout
         uses: actions/checkout@v3
         with:
           persist-credentials: true
 
-      # 2️⃣ Устанавливаем Python
+      # 2️⃣ Python
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      # 3️⃣ Устанавливаем зависимости
+      # 3️⃣ Установка зависимостей
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
 
-      # 4️⃣ Запускаем бота
+      # 4️⃣ Запуск бота
       - name: Run bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
@@ -40,14 +40,20 @@ jobs:
         run: |
           python bot.py
 
-      # 5️⃣ Коммитим state файл
+      # 5️⃣ Коммит состояния (без падений)
       - name: Commit state
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add state/load_posted.json
+          # Если папки нет — создать
+          mkdir -p state
 
-          git commit -m "Update posted state" || echo "No changes"
-
-          git push
+          # Если файл существует — коммитим
+          if [ -f state/load_posted.json ]; then
+            git add state/load_posted.json
+            git commit -m "Update posted state" || echo "No changes"
+            git push
+          else
+            echo "state/load_posted.json not found — skipping commit"
+          fi
