@@ -717,11 +717,20 @@ class EventBot:
                 final_link = external_link if external_link else norm_link
 
                 image_url = None
-                img_div = msg.find("a", class_="tgme_widget_message_photo_wrap")
-                if img_div:
-                    sm = re.search(r"url\('([^']+)'\)", img_div.get("style", ""))
-                    if sm:
-                        image_url = sm.group(1)
+
+# Telegram photo preview
+                photo_wrap = msg.find("a", class_="tgme_widget_message_photo_wrap")
+                if photo_wrap:
+                    style = photo_wrap.get("style", "")
+                    match = re.search(r"url\('([^']+)'\)", style)
+                    if match:
+                        image_url = match.group(1)
+
+# если нет — попробуем img внутри текста
+                if not image_url:
+                    img_tag = td.find("img")
+                    if img_tag and img_tag.get("src"):
+                        image_url = img_tag["src"]
 
                 # Дайджест
                 if re.search(r"\d{1,2}[.\-]\d{2}\s+(?:в\s+)?\d{1,2}:\d{2}", text):
@@ -831,14 +840,28 @@ class EventBot:
                     continue
 
                 image_url = None
-                img = link.find("img", src=True) or (parent.find("img", src=True) if parent else None)
 
+
+# обычный img
+                img = parent.find("img") if parent else None
                 if img:
-                    src = img.get("src", "")
-                    if src and not src.startswith("http"):
-                        from urllib.parse import urljoin
-                        src = urljoin(site["url"], src)
-                    image_url = src or None
+                    src = img.get("src") or img.get("data-src")
+                    if src:
+                        if not src.startswith("http"):
+                            from urllib.parse import urljoin
+                            src = urljoin(site["url"], src)
+                        image_url = src
+
+# background-image fallback
+                if not image_url and parent:
+                    style = parent.get("style", "")
+                    match = re.search(r"url\(['\"]?([^'\")]+)", style)
+                    if match:
+                        src = match.group(1)
+                        if not src.startswith("http"):
+                            from urllib.parse import urljoin
+                            src = urljoin(site["url"], src)
+                        image_url = src
 
                 # ❗ ВАЖНО: НЕ добавляем в self.posted здесь
                 # Добавление должно происходить ТОЛЬКО после успешной публикации
@@ -899,13 +922,18 @@ async def main():
 
         for event in unique[:15]:
 
-            # 🔥 НОРМАЛИЗУЕМ ССЫЛКУ
             norm_link = normalize_link(event.get("link", ""))
 
-            # 🔥 ГЛАВНАЯ ПРОВЕРКА ОТ ДУБЛЕЙ
+    # 🔥 СНАЧАЛА проверка дубля
             if norm_link in bot_obj.posted:
                 logger.info(f"⏭️ Уже публиковалось: {event.get('title')[:50]}")
                 continue
+
+    # 🔥 Потом fallback картинка
+            DEFAULT_IMAGE = "https://yourdomain.com/default-event.jpg"
+
+            if not event.get("image_url"):
+                event["image_url"] = DEFAULT_IMAGE
 
             text = make_post(event)
             if not text:
