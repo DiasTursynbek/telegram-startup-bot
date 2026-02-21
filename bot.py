@@ -895,15 +895,15 @@ class EventBot:
 
 
 # ─── main ────────────────────────────────────────────────────────────────────
-
 async def main():
     logger.info("🚀 Старт...")
+
     if not BOT_TOKEN:
         logger.error("❌ BOT_TOKEN не найден!")
         return
 
     bot_obj = EventBot()
-    bot = Bot(token=BOT_TOKEN)
+    bot_api = Bot(token=BOT_TOKEN)
 
     try:
         events = await bot_obj.get_all_events()
@@ -920,45 +920,51 @@ async def main():
 
         posted = 0
 
+        DEFAULT_IMAGE = "https://yourdomain.com/default-event.jpg"
+
         for event in unique[:15]:
 
             norm_link = normalize_link(event.get("link", ""))
 
-    # 🔥 СНАЧАЛА проверка дубля
+            # 🔥 ПРОВЕРКА ДУБЛЯ
             if norm_link in bot_obj.posted:
                 logger.info(f"⏭️ Уже публиковалось: {event.get('title')[:50]}")
                 continue
 
-    # 🔥 Потом fallback картинка
-            DEFAULT_IMAGE = "https://yourdomain.com/default-event.jpg"
-
-            if not event.get("image_url"):
-                event["image_url"] = DEFAULT_IMAGE
+            # fallback картинка
+            image_url = event.get("image_url") or DEFAULT_IMAGE
 
             text = make_post(event)
             if not text:
                 continue
 
             try:
-                if event.get("image_url"):
-                    try:
-                        await bot.send_photo(
-                            chat_id=CHANNEL_ID,
-                            message_thread_id=MESSAGE_THREAD_ID,
-                            photo=event["image_url"],
-                            caption=text,
-                            parse_mode="HTML",
-                        )
-                    except Exception:
-                        await bot.send_message(
-                            chat_id=CHANNEL_ID,
-                            message_thread_id=MESSAGE_THREAD_ID,
-                            text=text,
-                            parse_mode="HTML",
-                            disable_web_page_preview=True,
-                        )
-                else:
-                    await bot.send_message(
+                photo_sent = False
+
+                # ───────── Скачать картинку вручную ─────────
+                try:
+                    session = await bot_obj.get_session()
+                    async with session.get(image_url, timeout=15) as resp:
+                        if resp.status == 200:
+                            content_type = resp.headers.get("Content-Type", "")
+                            if "image" in content_type:
+                                photo_bytes = await resp.read()
+
+                                await bot_api.send_photo(
+                                    chat_id=CHANNEL_ID,
+                                    message_thread_id=MESSAGE_THREAD_ID,
+                                    photo=photo_bytes,
+                                    caption=text,
+                                    parse_mode="HTML",
+                                )
+
+                                photo_sent = True
+                except Exception as img_error:
+                    logger.warning(f"⚠️ Фото не скачалось: {img_error}")
+
+                # ───────── Если фото не удалось ─────────
+                if not photo_sent:
+                    await bot_api.send_message(
                         chat_id=CHANNEL_ID,
                         message_thread_id=MESSAGE_THREAD_ID,
                         text=text,
@@ -966,12 +972,12 @@ async def main():
                         disable_web_page_preview=True,
                     )
 
-                posted += 1
-                logger.info(f"✅ ({posted}) {event.get('title','')[:50]}")
-
-                # 🔥 ДОБАВЛЯЕМ В STATE ТОЛЬКО ПОСЛЕ УСПЕШНОЙ ОТПРАВКИ
+                # ✅ сохраняем после успешной отправки
                 bot_obj.posted.add(norm_link)
                 save_posted(bot_obj.posted)
+
+                posted += 1
+                logger.info(f"✅ ({posted}) {event.get('title','')[:50]}")
 
                 await asyncio.sleep(2)
 
