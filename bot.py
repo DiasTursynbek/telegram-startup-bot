@@ -11,6 +11,9 @@ import re
 import json
 from pathlib import Path
 
+from PIL import Image, ImageDraw, ImageFont
+import io
+
 STATE_DIR = Path("state")
 POSTED_FILE = STATE_DIR / "load_posted.json"
 
@@ -894,6 +897,61 @@ class EventBot:
         
 
 
+
+def generate_cover():
+
+    width = 1080
+    height = 1080
+
+    # тёмный фон
+    img = Image.new("RGB", (width, height), "#0f172a")
+    draw = ImageDraw.Draw(img)
+
+    # градиент-полоска
+    for i in range(height):
+        color = int(30 + (i / height) * 50)
+        draw.line([(0, i), (width, i)], fill=(color, color + 20, 80))
+
+    # акцентный круг
+    draw.ellipse((340, 340, 740, 740), fill="#2563eb")
+
+    # текст логотипа
+    try:
+        font = ImageFont.truetype("arial.ttf", 90)
+    except:
+        font = ImageFont.load_default()
+
+    text = "EVENTPARSER"
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+
+    draw.text(
+        ((width - text_width) / 2, (height - text_height) / 2),
+        text,
+        fill="white",
+        font=font
+    )
+
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG")
+    buffer.seek(0)
+
+    return buffer
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ─── main ────────────────────────────────────────────────────────────────────
 async def main():
     logger.info("🚀 Старт...")
@@ -950,10 +1008,12 @@ async def main():
                             if "image" in content_type:
                                 photo_bytes = await resp.read()
 
+                                cover_image = generate_cover()
+
                                 await bot_api.send_photo(
                                     chat_id=CHANNEL_ID,
                                     message_thread_id=MESSAGE_THREAD_ID,
-                                    photo=photo_bytes,
+                                    photo=cover_image,
                                     caption=text,
                                     parse_mode="HTML",
                                 )
