@@ -8,6 +8,11 @@ import aiohttp
 from bs4 import BeautifulSoup
 from telegram import Bot
 import re
+import json
+from pathlib import Path
+
+STATE_DIR = Path("state")
+POSTED_FILE = STATE_DIR / "load_posted.json"
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -15,6 +20,56 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003812789640")
 MESSAGE_THREAD_ID = int(os.getenv("MESSAGE_THREAD_ID", "4"))
+
+
+
+
+
+
+def normalize_link(link: str) -> str:
+    if not link:
+        return ""
+
+    link = link.strip()
+
+    # убираем /s/ из telegram preview
+    link = link.replace("https://t.me/s/", "https://t.me/")
+
+    # убираем параметры ?...
+    link = link.split("?")[0]
+
+    # убираем завершающий /
+    link = link.rstrip("/")
+
+    return link
+
+
+
+
+
+
+def load_posted() -> set:
+    if POSTED_FILE.exists():
+        try:
+            with open(POSTED_FILE, "r", encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
+    return set()
+
+
+
+
+def save_posted(posted: set):
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+        with open(POSTED_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(posted), f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Ошибка сохранения posted_links: {e}")
+
+
 
 URLS = [
     {"url": "https://astanahub.com/ru/event/", "name": "Astana Hub"},
@@ -332,53 +387,21 @@ def normalize_glued_text(s: str) -> str:
     s = re.sub(r"(\d{1,2}:\d{2})(?=[A-Za-zА-Яа-яЁё])", r"\1 ", s)
     # "Фев,16:00" -> "Фев, 16:00"
     s = re.sub(r"([а-яёА-ЯЁ]{3,}),(\d{1,2}:\d{2})", r"\1, \2", s)
-
-    # ✅ ГОРОД+ТЕКСТ без пробела: "АлматыIT" -> "Алматы IT"
-    city_tokens = sorted(set(KZ_CITIES.values()), key=len, reverse=True)
-    for city in city_tokens:
-        s = re.sub(rf"({re.escape(city)})(?=[A-Za-zА-ЯЁа-яё])", r"\1 ", s)
-
     # двойные пробелы
     s = re.sub(r"\s{2,}", " ", s)
     return s
-
-
-def strip_leading_city_from_title(title: str) -> str:
-    """
-    Убирает город/онлайн в начале заголовка:
-    "Алматы IT-экосистема" -> "IT-экосистема"
-    "Атырау Проектирование..." -> "Проектирование..."
-    "Онлайн Внедрение..." -> "Внедрение..."
-    """
-    t = normalize_glued_text(strip_emoji(title)).strip()
-
-    city_tokens = sorted(
-        set(KZ_CITIES.values()) | {"Онлайн", "Online", "online", "Zoom", "ZOOM", "zoom", "Онлайн (Zoom)"},
-        key=len,
-        reverse=True,
-    )
-
-    for city in city_tokens:
-        t = re.sub(
-            rf"^\s*{re.escape(city)}\s*([\-–—:•,])?\s*",
-            "",
-            t,
-            flags=re.IGNORECASE,
-        )
-
-    return t.strip(" -–—•,:.").strip()
 
 
 def strip_leading_datetime_from_title(title: str) -> str:
     """
     На всякий случай: если заголовок начинается с даты/времени — срезаем.
     Примеры:
-    "24 Фев, 16:00 Онлайн Внедрение..." -> "Внедрение..."
+    "24 Фев, 16:00 Онлайн Внедрение..." -> "Онлайн Внедрение..."
     "24 февраля 16:00Внедрение..." -> "Внедрение..."
     """
     t = strip_emoji(title).strip()
 
-    # убираем приклеенное время/город внутри
+    # убираем приклеенное время внутри
     t = normalize_glued_text(t)
 
     # 24 фев, 16:00 ...
@@ -397,9 +420,6 @@ def strip_leading_datetime_from_title(title: str) -> str:
     )
     # 24.02.2026 ...
     t = re.sub(r"^\s*\d{1,2}\.\d{2}(?:\.\d{4})?\s*", "", t)
-
-    # ✅ убираем город/онлайн в начале (если остался)
-    t = strip_leading_city_from_title(t)
 
     return t.strip(" -–•.,").strip()
 
@@ -501,7 +521,7 @@ def make_post(event: Dict) -> str:
     location = event.get("location", "")
     venue = event.get("venue", "")
 
-    # важно: дата/город в заголовке убирается всегда
+    # важно: дата в заголовке убирается всегда
     title = strip_leading_datetime_from_title(title)
 
     lines = [f"🎯 <b>{title}</b>"]
@@ -527,7 +547,7 @@ def make_post(event: Dict) -> str:
 class EventBot:
     def __init__(self):
         self.session = None
-        self.posted = set()
+        self.posted = load_posted()
 
     async def get_session(self) -> aiohttp.ClientSession:
         if not self.session:
@@ -656,9 +676,12 @@ class EventBot:
                 le = msg.find("a", class_="tgme_widget_message_date")
                 post_link = le["href"] if le else f"https://t.me/{channel['username']}"
 
-                if post_link in self.posted:
+                norm_link = normalize_link(post_link)
+
+                if norm_link in self.posted:
                     continue
-                self.posted.add(post_link)
+
+                self.posted.add(norm_link)
 
                 # image
                 image_url = None
@@ -757,90 +780,87 @@ class EventBot:
 
     # ── Sites ────────────────────────────────────────────────────────────────
 
-    async def parse_site(self, site: Dict) -> List[Dict]:
-        html = await self.fetch(site["url"])
-        if not html:
-            return []
+async def parse_site(self, site: Dict) -> List[Dict]:
 
-        soup = BeautifulSoup(html, "html.parser")
-        events = []
+    html = await self.fetch(site["url"])
+    if not html:
+        return []
 
-        for link in soup.find_all("a", href=True)[:80]:
-            try:
-                href = link.get("href", "")
-                title_raw = link.get_text(strip=True)
+    soup = BeautifulSoup(html, "html.parser")
+    events = []
 
-                if not href or not title_raw or len(title_raw) < 15:
-                    continue
-                if not href.startswith("http"):
-                    from urllib.parse import urljoin
-                    href = urljoin(site["url"], href)
-                if href.rstrip("/") == site["url"].rstrip("/"):
-                    continue
-                if href in self.posted:
-                    continue
-                if is_site_trash(title_raw):
-                    continue
-                if not is_real_event(title_raw):
-                    continue
+    for link in soup.find_all("a", href=True)[:80]:
+        try:
+            href = link.get("href", "")
+            title_raw = link.get_text(strip=True)
 
-                parent = link.find_parent(["div", "article", "li", "section"])
-                context = parent.get_text(separator=" ", strip=True) if parent else title_raw
-                dt = parse_date(context)
-
-                if not is_future(dt):
-                    continue
-
-                image_url = None
-                img = link.find("img", src=True) or (parent.find("img", src=True) if parent else None)
-                if img:
-                    src = img.get("src", "")
-                    if src and not src.startswith("http"):
-                        from urllib.parse import urljoin
-                        src = urljoin(site["url"], src)
-                    image_url = src or None
-
-                self.posted.add(href)
-
-                title_clean = clean_title_deterministic(title_raw) or strip_emoji(dedup_title(title_raw))[:120]
-
-                events.append(
-                    {
-                        "title": title_clean,
-                        "date": format_date(dt),
-                        "location": extract_location(context) or "",
-                        "venue": extract_venue(context),
-                        "link": href,
-                        "source": site["name"],
-                        "image_url": image_url,
-                    }
-                )
-
-                if len(events) >= 5:
-                    break
-            except Exception:
+            if not href or not title_raw or len(title_raw) < 15:
                 continue
 
-        return events
+            if not href.startswith("http"):
+                from urllib.parse import urljoin
+                href = urljoin(site["url"], href)
 
-    async def get_all_events(self) -> List[Dict]:
-        all_events = []
+            # 🔥 нормализация ссылки
+            href = normalize_link(href)
 
-        logger.info(f"🌐 Парсинг {len(URLS)} сайтов...")
-        for site in URLS:
-            evs = await self.parse_site(site)
-            all_events.extend(evs)
-            if evs:
-                logger.info(f"✅ {site['name']}: {len(evs)}")
+            if href.rstrip("/") == normalize_link(site["url"]).rstrip("/"):
+                continue
 
-        logger.info(f"📱 Парсинг {len(TELEGRAM_CHANNELS)} каналов...")
-        for ch in TELEGRAM_CHANNELS:
-            evs = await self.parse_channel(ch)
-            all_events.extend(evs)
-            if evs:
-                logger.info(f"✅ {ch['name']}: {len(evs)}")
+            # 🔥 проверка дубля через нормализованную ссылку
+            if href in self.posted:
+                continue
 
-        return all_events
+            if is_site_trash(title_raw):
+                continue
+
+            if not is_real_event(title_raw):
+                continue
+
+            parent = link.find_parent(["div", "article", "li", "section"])
+            context = parent.get_text(separator=" ", strip=True) if parent else title_raw
+            dt = parse_date(context)
+
+            if not is_future(dt):
+                continue
+
+            image_url = None
+            img = link.find("img", src=True) or (parent.find("img", src=True) if parent else None)
+
+            if img:
+                src = img.get("src", "")
+                if src and not src.startswith("http"):
+                    from urllib.parse import urljoin
+                    src = urljoin(site["url"], src)
+                image_url = src or None
+
+            # ❗ ВАЖНО: НЕ добавляем в self.posted здесь
+            # Добавление должно происходить ТОЛЬКО после успешной публикации
+
+            title_clean = (
+                clean_title_deterministic(title_raw)
+                or strip_emoji(dedup_title(title_raw))[:120]
+            )
+
+            events.append(
+                {
+                    "title": title_clean,
+                    "date": format_date(dt),
+                    "location": extract_location(context) or "",
+                    "venue": extract_venue(context),
+                    "link": href,
+                    "source": site["name"],
+                    "image_url": image_url,
+                }
+            )
+
+            if len(events) >= 5:
+                break
+
+        except Exception:
+            continue
+
+    return events
 
 
 # ─── main ────────────────────────────────────────────────────────────────────
@@ -865,12 +885,24 @@ async def main():
                 seen.add(key)
 
         logger.info(f"📊 Уникальных будущих событий: {len(unique)}")
+        logger.info(f"📦 Уже опубликовано: {len(bot_obj.posted)}")
 
         posted = 0
+
         for event in unique[:15]:
+
+            # 🔥 НОРМАЛИЗУЕМ ССЫЛКУ
+            norm_link = normalize_link(event.get("link", ""))
+
+            # 🔥 ГЛАВНАЯ ПРОВЕРКА ОТ ДУБЛЕЙ
+            if norm_link in bot_obj.posted:
+                logger.info(f"⏭️ Уже публиковалось: {event.get('title')[:50]}")
+                continue
+
             text = make_post(event)
             if not text:
                 continue
+
             try:
                 if event.get("image_url"):
                     try:
@@ -900,12 +932,17 @@ async def main():
 
                 posted += 1
                 logger.info(f"✅ ({posted}) {event.get('title','')[:50]}")
+
+                # 🔥 ДОБАВЛЯЕМ В STATE ТОЛЬКО ПОСЛЕ УСПЕШНОЙ ОТПРАВКИ
+                bot_obj.posted.add(norm_link)
+                save_posted(bot_obj.posted)
+
                 await asyncio.sleep(2)
 
             except Exception as e:
                 logger.error(f"❌ send error: {e}")
 
-        logger.info(f"✅ Готово! Опубликовано: {posted}")
+        logger.info(f"✅ Готово! Опубликовано новых: {posted}")
 
     finally:
         await bot_obj.close()
