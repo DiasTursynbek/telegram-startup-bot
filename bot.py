@@ -123,6 +123,65 @@ def remove_weekday_from_start(text: str) -> str:
 
 
 
+def generate_universal_description(full_text: str, title: str) -> str:
+    text = strip_emoji(full_text)
+    text = normalize_glued_text(text)
+
+    if title:
+        text = re.sub(re.escape(title), "", text, flags=re.IGNORECASE)
+
+    text = re.sub(r"http\S+", "", text)
+
+    sentences = re.split(r"[.!?]\s+", text)
+
+    clean_sentences = []
+
+    for s in sentences:
+        s = s.strip()
+
+        if len(s) < 40:
+            continue
+
+        if any(x in s.lower() for x in ["подробнее", "ссылка", "регистрация", "https"]):
+            continue
+
+        clean_sentences.append(s)
+
+        if len(clean_sentences) >= 2:
+            break
+
+    if not clean_sentences:
+        return ""
+
+    description = ". ".join(clean_sentences)
+
+    words = description.split()
+    if len(words) > 30:
+        description = " ".join(words[:30]) + "..."
+
+    return description.strip()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #       OCR
 
@@ -827,6 +886,17 @@ def make_post(event: Dict) -> str:
 
     lines = [f"🎯 <b>{title}</b>"]
 
+    description = generate_universal_description(
+        event.get("full_text", ""),
+        title
+    )
+
+    if description:
+        lines.append("")
+        lines.append(f"📝 {description}")
+
+
+
     if location in ("Онлайн", "Онлайн (Zoom)"):
         lines.append("🌐 Онлайн")
     elif location:
@@ -1086,6 +1156,7 @@ class EventBot:
                         "venue": extract_venue(text),
                         "link": final_link,
                         "source": channel["name"],
+                        "full_text": text,
                         "image_url": image_url,
                     }
                 )
@@ -1214,6 +1285,7 @@ class EventBot:
                         "location": extract_location(context) or "",
                         "venue": extract_venue(context),
                         "link": href,
+                        "full_text": context,
                         "source": site["name"],
                         "image_url": image_url,
                     }
