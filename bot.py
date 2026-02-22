@@ -11,8 +11,7 @@ import re
 import json
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
-import io
+
 
 STATE_DIR = Path("state")
 POSTED_FILE = STATE_DIR / "load_posted.json"
@@ -545,6 +544,32 @@ def make_post(event: Dict) -> str:
     return "\n".join(lines)
 
 
+
+
+
+
+
+
+
+
+
+
+
+def is_clean_photo(url: str) -> bool:
+    url = url.lower()
+    blacklist = [
+        "poster",
+        "banner",
+        "afisha",
+        "event",
+        "card",
+        "square",
+        "1080x",
+    ]
+    return not any(word in url for word in blacklist)
+
+
+
 # ─── Bot ─────────────────────────────────────────────────────────────────────
 
 class EventBot:
@@ -796,6 +821,28 @@ class EventBot:
 
         return all_events
 
+
+
+
+    def is_clean_photo(url: str) -> bool:
+        url = url.lower()
+
+        # исключаем баннеры и постеры
+        blacklist = [
+            "banner",
+            "poster",
+            "event",
+            "flyer",
+            "afisha",
+            "1080x",
+            "square",
+            "card",
+        ]
+
+        return not any(word in url for word in blacklist)
+    
+
+    
     # ── Sites ────────────────────────────────────────────────────────────────
 
     async def parse_site(self, site: Dict) -> List[Dict]:
@@ -846,28 +893,40 @@ class EventBot:
 
 
 # обычный img
-                img = parent.find("img") if parent else None
-                if img:
-                    src = img.get("src") or img.get("data-src")
-                    if src:
+                image_url = None
+
+                if parent:
+                    imgs = parent.find_all("img")
+
+                    for img in imgs:
+                        src = img.get("src") or img.get("data-src")
+                        if not src:
+                            continue
+
                         if not src.startswith("http"):
                             from urllib.parse import urljoin
                             src = urljoin(site["url"], src)
-                        image_url = src
 
-# background-image fallback
+                        # фильтруем постеры
+                        if is_clean_photo(src):
+                            image_url = src
+                            break
+
+                # fallback — background-image
                 if not image_url and parent:
                     style = parent.get("style", "")
                     match = re.search(r"url\(['\"]?([^'\")]+)", style)
+
                     if match:
                         src = match.group(1)
+
                         if not src.startswith("http"):
                             from urllib.parse import urljoin
                             src = urljoin(site["url"], src)
-                        image_url = src
 
-                # ❗ ВАЖНО: НЕ добавляем в self.posted здесь
-                # Добавление должно происходить ТОЛЬКО после успешной публикации
+                        if is_clean_photo(src):
+                            image_url = src
+
 
                 title_clean = (
                     clean_title_deterministic(title_raw)
@@ -898,52 +957,8 @@ class EventBot:
 
 
 
-def generate_cover():
 
-    width = 1080
-    height = 1080
-
-    # тёмный фон
-    img = Image.new("RGB", (width, height), "#0f172a")
-    draw = ImageDraw.Draw(img)
-
-    # градиент-полоска
-    for i in range(height):
-        color = int(30 + (i / height) * 50)
-        draw.line([(0, i), (width, i)], fill=(color, color + 20, 80))
-
-    # акцентный круг
-    draw.ellipse((340, 340, 740, 740), fill="#2563eb")
-
-    # текст логотипа
-    try:
-        font = ImageFont.truetype("arial.ttf", 90)
-    except:
-        font = ImageFont.load_default()
-
-    text = "EVENTPARSER"
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
-
-    draw.text(
-        ((width - text_width) / 2, (height - text_height) / 2),
-        text,
-        fill="white",
-        font=font
-    )
-
-    buffer = io.BytesIO()
-    img.save(buffer, format="PNG")
-    buffer.seek(0)
-
-    return buffer
-
-
-
-
-
-
+    
 
 
 
@@ -1008,12 +1023,10 @@ async def main():
                             if "image" in content_type:
                                 photo_bytes = await resp.read()
 
-                                cover_image = generate_cover()
-
                                 await bot_api.send_photo(
                                     chat_id=CHANNEL_ID,
                                     message_thread_id=MESSAGE_THREAD_ID,
-                                    photo=cover_image,
+                                    photo=photo_bytes,
                                     caption=text,
                                     parse_mode="HTML",
                                 )
