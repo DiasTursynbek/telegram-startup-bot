@@ -127,14 +127,47 @@ def generate_universal_description(full_text: str, title: str) -> str:
     text = strip_emoji(full_text)
     text = normalize_glued_text(text)
 
+    # Удаляем заголовок
     if title:
         text = re.sub(re.escape(title), "", text, flags=re.IGNORECASE)
 
+    # Удаляем ссылки
     text = re.sub(r"http\S+", "", text)
 
+    # 🚨 Удаляем Telegram UI мусор
+    UI_TRASH = [
+        "сохранить",
+        "сохранено",
+        "скопировать ссылку",
+        "telegram",
+        "facebook",
+        "whatsapp",
+        "linkedin",
+    ]
+
+    lines = text.split("\n")
+    clean_lines = []
+
+    for line in lines:
+        low = line.lower()
+
+        if any(word in low for word in UI_TRASH):
+            continue
+
+        if len(line.strip()) < 30:
+            continue
+
+        clean_lines.append(line.strip())
+
+    if not clean_lines:
+        return ""
+
+    text = " ".join(clean_lines)
+
+    # Разбиваем на предложения
     sentences = re.split(r"[.!?]\s+", text)
 
-    clean_sentences = []
+    good = []
 
     for s in sentences:
         s = s.strip()
@@ -142,27 +175,24 @@ def generate_universal_description(full_text: str, title: str) -> str:
         if len(s) < 40:
             continue
 
-        if any(x in s.lower() for x in ["подробнее", "ссылка", "регистрация", "https"]):
+        if any(x in s.lower() for x in ["подробнее", "регистрация", "ссылка"]):
             continue
 
-        clean_sentences.append(s)
+        good.append(s)
 
-        if len(clean_sentences) >= 2:
+        if len(good) >= 2:
             break
 
-    if not clean_sentences:
+    if not good:
         return ""
 
-    description = ". ".join(clean_sentences)
+    description = ". ".join(good)
 
     words = description.split()
     if len(words) > 30:
         description = " ".join(words[:30]) + "..."
 
     return description.strip()
-
-
-
 
 
 
