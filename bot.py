@@ -20,6 +20,7 @@ from PIL import Image
 
 
 
+
 STATE_DIR = Path("state")
 POSTED_FILE = STATE_DIR / "load_posted.json"
 
@@ -33,17 +34,43 @@ MESSAGE_THREAD_ID = int(os.getenv("MESSAGE_THREAD_ID", "4"))
 
 
 def remove_city_from_title(title: str) -> str:
-    low = title.lower()
+    for city_key in KZ_CITIES.keys():
+        pattern = re.compile(rf"{city_key}", re.IGNORECASE)
+        title = pattern.sub("", title)
 
-    for key in KZ_CITIES.keys():
-        if key in low:
-            pattern = re.compile(re.escape(key), re.IGNORECASE)
-            title = pattern.sub("", title)
-
-    # убираем двойные пробелы
     title = re.sub(r"\s{2,}", " ", title)
-
     return title.strip(" -–•,")
+
+
+
+
+
+def fix_glued_words(text: str) -> str:
+    # Кириллица + латиница
+    text = re.sub(r'([а-яё])([A-Z])', r'\1 \2', text)
+    text = re.sub(r'([a-z])([А-ЯЁ])', r'\1 \2', text)
+    text = re.sub(r'([а-яё])([А-ЯЁ])', r'\1 \2', text)
+    return text
+
+
+
+
+def is_clean_photo(url: str) -> bool:
+    url = url.lower()
+
+    blacklist = [
+        "banner",
+        "poster",
+        "event",
+        "flyer",
+        "afisha",
+        "1080x",
+        "square",
+        "card",
+    ]
+
+    return not any(word in url for word in blacklist)
+
 
 
 
@@ -485,10 +512,10 @@ def looks_like_description(title: str) -> bool:
 
 
 def dedup_title(title: str) -> str:
-    """'Data Community BirthdayData Community Birthday' → 'Data Community Birthday'"""
-    for i in range(10, len(title) // 2 + 1):
-        if title[i:].startswith(title[:i]):
-            return title[:i].strip(" .,–-")
+    half = len(title) // 2
+    for i in range(10, half):
+        if title[i:].strip() == title[:len(title)-i].strip():
+            return title[:len(title)-i].strip()
     return title
 
 
@@ -535,18 +562,22 @@ def strip_leading_datetime_from_title(title: str) -> str:
     return t.strip(" -–•.,").strip()
 
 
+
+
+
+
+
+
+
+
 def clean_title_deterministic(raw_title: str) -> Optional[str]:
+
     s = strip_leading_datetime_from_title(raw_title)
-    s = remove_city_from_title(s)
+    s = fix_glued_words(s)
     s = dedup_title(s)
-    s = re.sub(r"\s{2,}", " ", s).strip()
+    s = remove_city_from_title(s)
 
-    if len(s) < 5:
-        return None
-    if looks_like_description(s):
-        return None
-
-    # обрезаем хвост после маркеров описания
+    # обрезаем хвост описания
     low = s.lower()
     for sig in DESCRIPTION_SIGNALS:
         idx = low.find(sig)
@@ -554,10 +585,20 @@ def clean_title_deterministic(raw_title: str) -> Optional[str]:
             s = s[:idx].strip(" -–•.,")
             break
 
-    s = s.strip()
+    s = re.sub(r"\s{2,}", " ", s).strip()
+
     if len(s) < 5:
         return None
+
+    if looks_like_description(s):
+        return None
+
     return s[:120]
+
+
+
+
+
 
 
 # ─── Parse glued line: "09 Фев, 17:00Шымкент Название" ───────────────────────
@@ -664,19 +705,6 @@ def make_post(event: Dict) -> str:
 
 
 
-
-def is_clean_photo(url: str) -> bool:
-    url = url.lower()
-    blacklist = [
-        "poster",
-        "banner",
-        "afisha",
-        "event",
-        "card",
-        "square",
-        "1080x",
-    ]
-    return not any(word in url for word in blacklist)
 
 
 
@@ -934,23 +962,7 @@ class EventBot:
 
 
 
-    def is_clean_photo(url: str) -> bool:
-        url = url.lower()
-
-        # исключаем баннеры и постеры
-        blacklist = [
-            "banner",
-            "poster",
-            "event",
-            "flyer",
-            "afisha",
-            "1080x",
-            "square",
-            "card",
-        ]
-
-        return not any(word in url for word in blacklist)
-    
+   
 
     
     # ── Sites ────────────────────────────────────────────────────────────────
@@ -1120,8 +1132,9 @@ async def main():
 
                 # ───── OCR авто-обрезка текста ─────
                 if event.get("image_url"):
+                    session = await bot_obj.get_session()
                     photo_to_send = await smart_crop_text_zones(
-                        bot_obj.session,
+                        session,
                         event["image_url"]
                     )
 
