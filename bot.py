@@ -106,34 +106,29 @@ def extract_short_title(text: str) -> Optional[str]:
     if not text:
         return None
 
-    # 1️⃣ если текст склеен дважды — убираем повтор
-    half = len(text) // 2
-    for i in range(10, half):
-        if text[i:].strip() == text[:len(text)-i].strip():
-            text = text[:len(text)-i].strip()
-            break
+    # 1️⃣ если строка начинается с повторяющегося заголовка
+    # ищем повтор первой части
+    words = text.split()
+    if len(words) > 6:
+        first_part = " ".join(words[:4])
+        if text.count(first_part) > 1:
+            idx = text.find(first_part, len(first_part))
+            if idx != -1:
+                text = text[:idx]
 
-    # 2️⃣ режем по первой точке
-    title = re.split(r"[.!?]", text)[0]
+    # 2️⃣ если есть двоеточие — часто это хороший разделитель
+    if ":" in text:
+        text = text.split(":")[0]
 
-    # 3️⃣ стоп-слова (начало описания)
-    stop_words = ["кажд", "если", "что тебя", "на встрече", "мероприятие будет"]
-    low = title.lower()
-    for w in stop_words:
-        idx = low.find(w)
-        if idx > 20:
-            title = title[:idx]
-            break
+    # 3️⃣ режем по первой точке
+    text = re.split(r"[.!?]", text)[0]
 
-    # 4️⃣ если есть длинная строка с двоеточием — оставляем левую часть
-    if len(title) > 80 and ":" in title:
-        title = title.split(":")[0]
+    # 4️⃣ жёсткое ограничение длины
+    if len(text) > 80:
+        text = text[:80]
 
-    # 5️⃣ ограничение длины
-    if len(title) > 120:
-        title = title[:120]
+    return text.strip(" -–•,")
 
-    return title.strip(" -–•,")
 
 
 
