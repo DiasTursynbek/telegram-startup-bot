@@ -11,6 +11,13 @@ import re
 import json
 from pathlib import Path
 
+import io
+import numpy as np
+import cv2
+import pytesseract
+from PIL import Image
+
+
 
 
 STATE_DIR = Path("state")
@@ -22,6 +29,98 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003812789640")
 MESSAGE_THREAD_ID = int(os.getenv("MESSAGE_THREAD_ID", "4"))
+
+
+
+
+
+
+
+
+# OCR
+
+DATE_HINTS = [
+    "202", "янв", "фев", "мар", "апр", "май", "июн",
+    "июл", "авг", "сен", "окт", "ноя", "дек",
+    "january", "february", "march", "april", "may",
+    "june", "july", "august", "september", "october",
+    "november", "december",
+    ":", ".", "-"
+]
+
+
+async def smart_crop_text_zones(session, image_url: str):
+    try:
+        async with session.get(image_url, timeout=20) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.read()
+
+        pil_img = Image.open(io.BytesIO(data)).convert("RGB")
+        img = np.array(pil_img)
+
+        h, w, _ = img.shape
+
+        # OCR
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        ocr_data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
+
+        top_text_boxes = []
+        bottom_text_boxes = []
+
+        for i in range(len(ocr_data["text"])):
+            text = ocr_data["text"][i].lower().strip()
+            if not text:
+                continue
+
+            if any(hint in text for hint in DATE_HINTS):
+                x = ocr_data["left"][i]
+                y = ocr_data["top"][i]
+                bw = ocr_data["width"][i]
+                bh = ocr_data["height"][i]
+
+                if y < h * 0.35:
+                    top_text_boxes.append((x, y, bw, bh))
+                elif y > h * 0.65:
+                    bottom_text_boxes.append((x, y, bw, bh))
+
+        crop_top = 0
+        crop_bottom = h
+
+        if top_text_boxes:
+            max_y = max(y + bh for (_, y, _, bh) in top_text_boxes)
+            crop_top = int(max_y + 20)
+
+        if bottom_text_boxes:
+            min_y = min(y for (_, y, _, _) in bottom_text_boxes)
+            crop_bottom = int(min_y - 20)
+
+        # защита от полного уничтожения картинки
+        if crop_bottom - crop_top < h * 0.4:
+            return None
+
+        cropped = img[crop_top:crop_bottom, 0:w]
+
+        final_img = Image.fromarray(cropped)
+        buffer = io.BytesIO()
+        final_img.save(buffer, format="JPEG", quality=95)
+        buffer.seek(0)
+
+        return buffer
+
+    except Exception as e:
+        print("OCR crop error:", e)
+        return None
+    
+
+
+
+
+
+
+
+
+
 
 
 
@@ -965,8 +1064,6 @@ class EventBot:
 
 
 
-
-
 # ─── main ────────────────────────────────────────────────────────────────────
 async def main():
     logger.info("🚀 Старт...")
@@ -981,6 +1078,7 @@ async def main():
     try:
         events = await bot_obj.get_all_events()
 
+        # Убираем дубли по заголовку
         unique, seen = [], set()
         for e in events:
             key = (e.get("title", "")[:60]).lower()
@@ -993,50 +1091,39 @@ async def main():
 
         posted = 0
 
-        DEFAULT_IMAGE = "https://yourdomain.com/default-event.jpg"
-
         for event in unique[:15]:
 
             norm_link = normalize_link(event.get("link", ""))
 
-            # 🔥 ПРОВЕРКА ДУБЛЯ
+            # ───── Проверка дубля ─────
             if norm_link in bot_obj.posted:
                 logger.info(f"⏭️ Уже публиковалось: {event.get('title')[:50]}")
                 continue
-
-            # fallback картинка
-            image_url = event.get("image_url") or DEFAULT_IMAGE
 
             text = make_post(event)
             if not text:
                 continue
 
             try:
-                photo_sent = False
+                photo_to_send = None
 
-                # ───────── Скачать картинку вручную ─────────
-                try:
-                    session = await bot_obj.get_session()
-                    async with session.get(image_url, timeout=15) as resp:
-                        if resp.status == 200:
-                            content_type = resp.headers.get("Content-Type", "")
-                            if "image" in content_type:
-                                photo_bytes = await resp.read()
+                # ───── OCR авто-обрезка текста ─────
+                if event.get("image_url"):
+                    photo_to_send = await smart_crop_text_zones(
+                        bot_obj.session,
+                        event["image_url"]
+                    )
 
-                                await bot_api.send_photo(
-                                    chat_id=CHANNEL_ID,
-                                    message_thread_id=MESSAGE_THREAD_ID,
-                                    photo=photo_bytes,
-                                    caption=text,
-                                    parse_mode="HTML",
-                                )
-
-                                photo_sent = True
-                except Exception as img_error:
-                    logger.warning(f"⚠️ Фото не скачалось: {img_error}")
-
-                # ───────── Если фото не удалось ─────────
-                if not photo_sent:
+                # ───── Отправка ─────
+                if photo_to_send:
+                    await bot_api.send_photo(
+                        chat_id=CHANNEL_ID,
+                        message_thread_id=MESSAGE_THREAD_ID,
+                        photo=photo_to_send,
+                        caption=text,
+                        parse_mode="HTML",
+                    )
+                else:
                     await bot_api.send_message(
                         chat_id=CHANNEL_ID,
                         message_thread_id=MESSAGE_THREAD_ID,
@@ -1045,7 +1132,7 @@ async def main():
                         disable_web_page_preview=True,
                     )
 
-                # ✅ сохраняем после успешной отправки
+                # ───── Сохраняем в state только после успешной отправки ─────
                 bot_obj.posted.add(norm_link)
                 save_posted(bot_obj.posted)
 
@@ -1055,7 +1142,7 @@ async def main():
                 await asyncio.sleep(2)
 
             except Exception as e:
-                logger.error(f"❌ send error: {e}")
+                logger.error(f"❌ Ошибка отправки: {e}")
 
         logger.info(f"✅ Готово! Опубликовано новых: {posted}")
 
