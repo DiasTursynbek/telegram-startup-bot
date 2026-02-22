@@ -54,6 +54,14 @@ def fix_glued_words(text: str) -> str:
 
 
 
+def extract_city_from_title(title: str) -> Optional[str]:
+    lower = title.lower()
+    for key, value in KZ_CITIES.items():
+        if key in lower:
+            return value
+    return None
+
+
 
 def is_clean_photo(url: str) -> bool:
     url = url.lower()
@@ -919,7 +927,11 @@ class EventBot:
                         title_candidate = ln
                         break
 
-                title = clean_title_deterministic(title_candidate or "")
+                raw_title = title_candidate or ""
+
+                city_from_title = extract_city_from_title(raw_title)
+
+                title = clean_title_deterministic(raw_title)
                 if not title:
                     continue
 
@@ -930,7 +942,7 @@ class EventBot:
                     {
                         "title": title,
                         "date": format_date(dt, time_str),
-                        "location": extract_location(text) or "",
+                        "location": extract_location(text) or city_from_title or "",
                         "venue": extract_venue(text),
                         "link": final_link,
                         "source": channel["name"],
