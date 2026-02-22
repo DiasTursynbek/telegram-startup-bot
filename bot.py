@@ -121,78 +121,135 @@ def remove_weekday_from_start(text: str) -> str:
 
 
 
-
-
 def generate_universal_description(full_text: str, title: str) -> str:
     text = strip_emoji(full_text)
     text = normalize_glued_text(text)
 
-    # Удаляем заголовок
     if title:
         text = re.sub(re.escape(title), "", text, flags=re.IGNORECASE)
 
-    # Удаляем ссылки
+    # удаляем ссылки
     text = re.sub(r"http\S+", "", text)
 
-    # 🚨 Удаляем Telegram UI мусор
-    UI_TRASH = [
-        "сохранить",
-        "сохранено",
-        "скопировать ссылку",
-        "telegram",
-        "facebook",
-        "whatsapp",
-        "linkedin",
+    paragraphs = [p.strip() for p in text.split("\n") if len(p.strip()) > 50]
+
+    for p in paragraphs:
+
+        low = p.lower()
+
+        # пропускаем мусор
+        if any(w in low for w in [
+            "сохранить", "telegram", "facebook", "whatsapp",
+            "подробнее", "регистрация", "места ограничены"
+        ]):
+            continue
+
+        # пропускаем строки с датой
+        if re.search(r"\d{1,2}:\d{2}", p):
+            continue
+
+        if re.search(r"\d{1,2}\s+[а-яёА-ЯЁ]+", p):
+            continue
+
+        # если хороший абзац — берём
+        words = p.split()
+        if len(words) > 15:
+            if len(words) > 30:
+                return " ".join(words[:30]) + "..."
+            return p
+
+    return ""
+
+
+
+def generate_fallback_description(title: str) -> str:
+    t = title.lower()
+
+    if "career" in t:
+        return "Профориентационное мероприятие для школьников и студентов о выборе профессии и карьерных возможностях."
+
+    if "movie" in t:
+        return "Кино-встреча с обсуждением технологий и трендов в IT."
+
+    if "ai" in t or "искусственный интеллект" in t:
+        return "Мероприятие, посвящённое искусственному интеллекту и его применению в бизнесе и технологиях."
+
+    if "meetup" in t:
+        return "Неформальная встреча профессионалов для обмена опытом и нетворкинга."
+
+    if "форум" in t or "conference" in t:
+        return "Профессиональное событие с участием экспертов и обсуждением актуальных отраслевых тем."
+
+    return "Профессиональное мероприятие для специалистов и предпринимателей."
+
+
+
+def extract_program_block(full_text: str) -> str:
+    text = strip_emoji(full_text)
+    lines = text.split("\n")
+
+    trigger_words = [
+        "что тебя жд",
+        "что вас жд",
+        "в программе",
+        "программа",
+        "вы узнаете",
     ]
 
-    lines = text.split("\n")
-    clean_lines = []
+    start_index = None
 
-    for line in lines:
+    for i, line in enumerate(lines):
         low = line.lower()
-
-        if any(word in low for word in UI_TRASH):
-            continue
-
-        if len(line.strip()) < 30:
-            continue
-
-        clean_lines.append(line.strip())
-
-    if not clean_lines:
-        return ""
-
-    text = " ".join(clean_lines)
-
-    # Разбиваем на предложения
-    sentences = re.split(r"[.!?]\s+", text)
-
-    good = []
-
-    for s in sentences:
-        s = s.strip()
-
-        if len(s) < 40:
-            continue
-
-        if any(x in s.lower() for x in ["подробнее", "регистрация", "ссылка"]):
-            continue
-
-        good.append(s)
-
-        if len(good) >= 2:
+        if any(word in low for word in trigger_words):
+            start_index = i
             break
 
-    if not good:
+    if start_index is None:
         return ""
 
-    description = ". ".join(good)
+    collected = []
 
-    words = description.split()
-    if len(words) > 30:
-        description = " ".join(words[:30]) + "..."
+    for line in lines[start_index + 1:]:
+        clean = line.strip()
 
-    return description.strip()
+        if not clean:
+            continue
+
+        # стоп если дошли до даты / адреса
+        if any(x in clean.lower() for x in ["📍", "⏰", "http", "подробнее"]):
+            break
+
+        if re.search(r"\d{1,2}:\d{2}", clean):
+            break
+
+        if len(clean) < 5:
+            continue
+
+        collected.append(clean)
+
+        if len(collected) >= 4:
+            break
+
+    if not collected:
+        return ""
+
+    result = "\n".join(collected)
+
+    words = result.split()
+    if len(words) > 40:
+        result = " ".join(words[:40]) + "..."
+
+    return result.strip()
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -916,10 +973,21 @@ def make_post(event: Dict) -> str:
 
     lines = [f"🎯 <b>{title}</b>"]
 
-    description = generate_universal_description(
-        event.get("full_text", ""),
-        title
-    )
+# 1️⃣ пробуем вытащить блок "Что тебя ждёт"
+    program_block = extract_program_block(event.get("full_text", ""))
+
+    if program_block:
+        description = program_block
+    else:
+        # 2️⃣ пробуем взять нормальный абзац
+        description = generate_universal_description(
+            event.get("full_text", ""),
+            title
+        )
+
+    # 3️⃣ если вообще ничего нет — fallback
+    if not description:
+        description = generate_fallback_description(title)
 
     if description:
         lines.append("")
