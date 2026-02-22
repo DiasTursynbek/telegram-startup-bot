@@ -963,13 +963,7 @@ class EventBot:
 
                 title = clean_title_deterministic(raw_title)
 
-                explanation = generate_explanation(title, text)
-
-                if explanation:
-                    if explanation.lower() not in title.lower():
-                        title = f"{title} — {explanation}"
-
-
+                
                 if not title:
                     continue
 
@@ -1104,11 +1098,6 @@ class EventBot:
                     clean_title_deterministic(title_raw)
                     or strip_emoji(dedup_title(title_raw))[:120]
                 )
-                explanation = generate_explanation(title, context)
-
-                if explanation:
-                    if explanation.lower() not in title.lower():
-                        title = f"{title} — {explanation}"
                 city_from_title = extract_city_from_title(title_raw)
                 events.append(
                     {
