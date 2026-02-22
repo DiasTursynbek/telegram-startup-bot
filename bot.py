@@ -33,6 +33,27 @@ MESSAGE_THREAD_ID = int(os.getenv("MESSAGE_THREAD_ID", "4"))
 
 
 
+
+def strip_intro_phrases(text: str) -> str:
+    patterns = [
+        r"^в\s+(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)\s+",
+        r"^кажд(ую|ый|ое)?\s+(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)\s+",
+        r"^в\s+\w+\s+",  # в январе, в марте и т.п.
+        r"^приглашаем\s+",
+        r"^состоится\s+",
+        r"^будет\s+",
+    ]
+
+    s = text.strip()
+
+    for p in patterns:
+        s = re.sub(p, "", s, flags=re.IGNORECASE)
+
+    return s.strip(" -–•,")
+
+
+
+
 def remove_city_from_title(title: str) -> str:
     for city_key in KZ_CITIES.keys():
         pattern = re.compile(rf"{city_key}", re.IGNORECASE)
