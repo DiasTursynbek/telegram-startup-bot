@@ -99,36 +99,27 @@ def strip_intro_phrases(text: str) -> str:
     return s.strip(" -–•,")
 
 
-
-def extract_short_title(text: str) -> Optional[str]:
+def extract_short_title(text: str, max_words: int = 10) -> Optional[str]:
     text = strip_emoji(text).strip()
 
     if not text:
         return None
 
-    # 1️⃣ если строка начинается с повторяющегося заголовка
-    # ищем повтор первой части
+    # убираем двойное склеивание в начале
+    half = len(text) // 2
+    for i in range(10, half):
+        if text[i:].strip() == text[:len(text)-i].strip():
+            text = text[:len(text)-i].strip()
+            break
+
     words = text.split()
-    if len(words) > 6:
-        first_part = " ".join(words[:4])
-        if text.count(first_part) > 1:
-            idx = text.find(first_part, len(first_part))
-            if idx != -1:
-                text = text[:idx]
 
-    # 2️⃣ если есть двоеточие — часто это хороший разделитель
-    if ":" in text:
-        text = text.split(":")[0]
+    if len(words) <= max_words:
+        title = text
+    else:
+        title = " ".join(words[:max_words])
 
-    # 3️⃣ режем по первой точке
-    text = re.split(r"[.!?]", text)[0]
-
-    # 4️⃣ жёсткое ограничение длины
-    if len(text) > 80:
-        text = text[:80]
-
-    return text.strip(" -–•,")
-
+    return title.strip(" -–•,")
 
 
 
