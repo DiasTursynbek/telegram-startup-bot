@@ -104,6 +104,26 @@ def is_clean_photo(url: str) -> bool:
 
 
 
+def remove_weekday_from_start(text: str) -> str:
+    lower = text.lower()
+
+    for key in WEEK_DAYS.keys():
+        if lower.startswith(key + " "):
+            return text[len(key):].strip(" -–•, ")
+
+        if lower.startswith("в " + key + " "):
+            return text[len("в " + key):].strip(" -–•, ")
+
+        if lower.startswith("каждую " + key + " "):
+            return text[len("каждую " + key):].strip(" -–•, ")
+
+    return text
+
+
+
+
+
+
 #       OCR
 
 DATE_REGEX = re.compile(
@@ -451,6 +471,53 @@ KZ_CITIES = {
     "tashkent": "Ташкент, Узбекистан",
 }
 
+WEEK_DAYS = {
+    # Понедельник
+    "понедельник": "Понедельник",
+    "понедельника": "Понедельник",
+    "понедельнику": "Понедельник",
+    "понедельником": "Понедельник",
+    "monday": "Понедельник",
+
+    # Вторник
+    "вторник": "Вторник",
+    "вторника": "Вторник",
+    "вторнику": "Вторник",
+    "tuesday": "Вторник",
+
+    # Среда
+    "среда": "Среда",
+    "среду": "Среда",
+    "среды": "Среда",
+    "среде": "Среда",
+    "wednesday": "Среда",
+
+    # Четверг
+    "четверг": "Четверг",
+    "четверга": "Четверг",
+    "четвергу": "Четверг",
+    "thursday": "Четверг",
+
+    # Пятница
+    "пятница": "Пятница",
+    "пятницу": "Пятница",
+    "пятницы": "Пятница",
+    "пятнице": "Пятница",
+    "friday": "Пятница",
+
+    # Суббота
+    "суббота": "Суббота",
+    "субботу": "Суббота",
+    "субботы": "Суббота",
+    "saturday": "Суббота",
+
+    # Воскресенье
+    "воскресенье": "Воскресенье",
+    "воскресенья": "Воскресенье",
+    "воскресенью": "Воскресенье",
+    "sunday": "Воскресенье",
+}
+
 EMOJI_RE = re.compile(
     "[\U00010000-\U0010ffff\u2600-\u27ff\u2300-\u23ff\u25a0-\u25ff\u2B00-\u2BFF]",
     re.UNICODE,
@@ -649,6 +716,8 @@ def strip_leading_datetime_from_title(title: str) -> str:
 
 def clean_title_deterministic(raw_title: str) -> Optional[str]:
 
+    s = remove_weekday_from_start(s)
+    s = fix_glued_words(s)
     s = strip_leading_datetime_from_title(raw_title)
     s = fix_glued_words(s)
     s = dedup_title(s)
