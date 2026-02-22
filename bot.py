@@ -32,19 +32,18 @@ MESSAGE_THREAD_ID = int(os.getenv("MESSAGE_THREAD_ID", "4"))
 
 
 
+def remove_city_from_title(title: str) -> str:
+    low = title.lower()
 
+    for key in KZ_CITIES.keys():
+        if key in low:
+            pattern = re.compile(re.escape(key), re.IGNORECASE)
+            title = pattern.sub("", title)
 
+    # убираем двойные пробелы
+    title = re.sub(r"\s{2,}", " ", title)
 
-
-
-import cv2
-import numpy as np
-import pytesseract
-from PIL import Image
-import io
-import re
-
-
+    return title.strip(" -–•,")
 
 
 
@@ -538,6 +537,7 @@ def strip_leading_datetime_from_title(title: str) -> str:
 
 def clean_title_deterministic(raw_title: str) -> Optional[str]:
     s = strip_leading_datetime_from_title(raw_title)
+    s = remove_city_from_title(s)
     s = dedup_title(s)
     s = re.sub(r"\s{2,}", " ", s).strip()
 
