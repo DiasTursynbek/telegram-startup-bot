@@ -975,14 +975,28 @@ class EventBot:
                     continue
 
                 # Определяем заголовок
-                title_candidate = None
+                # Определяем заголовок корректно
+                raw_title = ""
+
                 for ln in text.split("\n"):
                     ln = strip_emoji(ln).strip()
                     if len(ln) > 10:
-                        title_candidate = ln
+                        raw_title = ln
                         break
 
-                raw_title = title_candidate or ""
+                if not raw_title:
+                    continue
+
+                # Берём только первое предложение
+                raw_title = re.split(r"[.!?]\s", raw_title)[0]
+
+                # Если слишком длинный — режем
+                if len(raw_title) > 140:
+                    raw_title = raw_title[:140]
+
+                # Если есть двоеточие и текст длинный — оставляем только левую часть
+                if len(raw_title) > 80 and ":" in raw_title:
+                    raw_title = raw_title.split(":")[0]
 
                 city_from_title = extract_city_from_title(raw_title)
 
