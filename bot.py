@@ -81,6 +81,37 @@ def is_clean_photo(url: str) -> bool:
 
 
 
+def strip_intro_phrases(text: str) -> str:
+    patterns = [
+        r"^в\s+\w+\s+",  # в пятницу, в среду
+        r"^кажд\w+\s+\w+\s+",  # каждую среду
+        r"^приглашаем\s+",
+        r"^состоится\s+",
+        r"^будет\s+",
+        r"^на\s+интересующ\w+\s+вас\s+вопрос\w+\s+ответят\s+",
+    ]
+
+    s = text.strip()
+
+    for p in patterns:
+        s = re.sub(p, "", s, flags=re.IGNORECASE)
+
+    return s.strip(" -–•,")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 #       OCR
@@ -576,34 +607,28 @@ def strip_leading_datetime_from_title(title: str) -> str:
 def generate_explanation(title: str, full_text: str) -> Optional[str]:
     t = full_text.lower()
 
-    # 1️⃣ Для кого
-    m = re.search(r"(для\s+[^\.\n]+)", t)
-    if m:
-        phrase = m.group(1)
-        phrase = re.sub(r"(приглашаем|состоится|будет|проводится)", "", phrase)
-        return phrase.strip().capitalize()
-
-    # 2️⃣ Как ...
-    m = re.search(r"(как\s+[^\.\n]+)", t)
-    if m:
-        return m.group(1).strip().capitalize()
-
-    # 3️⃣ О ...
-    m = re.search(r"(о\s+[^\.\n]+)", t)
-    if m:
-        return m.group(1).strip().capitalize()
-
-    # 4️⃣ Профориентация
+    # Профориентация
     if "профориентац" in t:
         return "Карьерная навигация для школьников и студентов"
 
-    # 5️⃣ ИИ + отрасли
+    # ИИ
     if "искусствен" in t or "ии" in t:
         if "бухгалтер" in t and "прав" in t:
             return "Как ИИ меняет бухгалтерию и право"
+        return "Применение искусственного интеллекта"
+
+    # Ответы на вопросы
+    if "ответ" in t and "вопрос" in t:
+        return "Ответы на вопросы бизнеса"
+
+    # Для кого
+    m = re.search(r"для\s+([^\.\n]+)", t)
+    if m:
+        phrase = m.group(1)
+        phrase = re.sub(r"(приглашаем|состоится|будет)", "", phrase)
+        return phrase.strip().capitalize()
 
     return None
-
 
 
 
@@ -962,12 +987,15 @@ class EventBot:
                 city_from_title = extract_city_from_title(raw_title)
 
                 title = clean_title_deterministic(raw_title)
+                if not title:
+                    continue
+
+                title = strip_intro_phrases(title)
 
                 explanation = generate_explanation(title, text)
 
-                if explanation:
-                    if explanation.lower() not in title.lower():
-                        title = f"{title} — {explanation}"
+                if explanation and explanation.lower() not in title.lower():
+                    title = f"{title} — {explanation}"
 
 
                 if not title:
@@ -1102,13 +1130,18 @@ class EventBot:
 
                 title_clean = (
                     clean_title_deterministic(title_raw)
-                    or strip_emoji(dedup_title(title_raw))[:120]
+                    or strip_emoji(dedup_title(title_raw))
                 )
-                explanation = generate_explanation(title, context)
 
-                if explanation:
-                    if explanation.lower() not in title.lower():
-                        title = f"{title} — {explanation}"
+                if not title_clean:
+                    continue
+
+                title_clean = strip_intro_phrases(title_clean)
+
+                explanation = generate_explanation(title_clean, context)
+
+                if explanation and explanation.lower() not in title_clean.lower():
+                    title_clean = f"{title_clean} — {explanation}"
                 city_from_title = extract_city_from_title(title_raw)
                 events.append(
                     {
