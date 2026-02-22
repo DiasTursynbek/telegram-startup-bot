@@ -14,11 +14,12 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      # 1️⃣ Checkout репозитория
+      # 1️⃣ Checkout
       - name: Checkout
         uses: actions/checkout@v3
         with:
           persist-credentials: true
+          fetch-depth: 0   # 🔥 важно для rebase
 
       # 2️⃣ Python
       - name: Setup Python
@@ -26,41 +27,42 @@ jobs:
         with:
           python-version: '3.11'
 
-          
+      # 3️⃣ System packages (OCR)
       - name: Install system packages
         run: |
           sudo apt-get update
           sudo apt-get install -y tesseract-ocr
 
-          
-      # 3️⃣ Установка зависимостей
+      # 4️⃣ Python dependencies
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
 
-      # 4️⃣ Запуск бота
+      # 5️⃣ Run bot
       - name: Run bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
           MESSAGE_THREAD_ID: ${{ secrets.MESSAGE_THREAD_ID }}
-        run: |
-          python bot.py
+        run: python bot.py
 
-      # 5️⃣ Коммит состояния (без падений)
+      # 6️⃣ Commit state (safe)
       - name: Commit state
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Если папки нет — создать
           mkdir -p state
 
-          # Если файл существует — коммитим
           if [ -f state/load_posted.json ]; then
             git add state/load_posted.json
-            git commit -m "Update posted state" || echo "No changes"
-            git push
+            git commit -m "Update posted state" || echo "No changes to commit"
+
+            # 🔥 безопасный pull + rebase
+            git pull --rebase origin main || echo "Nothing to rebase"
+
+            # 🔥 push с защитой от гонок
+            git push origin main
           else
             echo "state/load_posted.json not found — skipping commit"
           fi
