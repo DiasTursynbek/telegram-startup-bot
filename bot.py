@@ -35,7 +35,7 @@ MESSAGE_THREAD_ID = int(os.getenv("MESSAGE_THREAD_ID", "4"))
 
 def remove_city_from_title(title: str) -> str:
     for city_key in KZ_CITIES.keys():
-        pattern = re.compile(rf"{city_key}", re.IGNORECASE)
+        pattern = re.compile(rf"\b{city_key}\b", re.IGNORECASE)
         title = pattern.sub("", title)
 
     title = re.sub(r"\s{2,}", " ", title)
@@ -375,6 +375,7 @@ KZ_CITIES = {
     "атырау": "Атырау",
     "жезказган": "Жезқазған",
     "жезқазған": "Жезқазған",
+    "петропавловск": "Петропавловск",
     "актау": "Актау",
     "онлайн": "Онлайн",
     "online": "Онлайн",
@@ -807,7 +808,7 @@ class EventBot:
 
             ctx = line + " " + (lines[i + 1] if i + 1 < len(lines) else "")
             location = extract_location(ctx) or extract_location(text)
-
+            city_from_title = extract_city_from_title(title_raw)
             title_clean = clean_title_deterministic(title_raw) or dedup_title(title_raw[:120])
             if not title_clean:
                 i += 1
@@ -817,7 +818,7 @@ class EventBot:
                 {
                     "title": title_clean,
                     "date": format_date(dt, time_str),
-                    "location": location or "",
+                    "location": extract_location(text) or city_from_title or "",
                     "venue": extract_venue(ctx),
                     "link": link or post_link,
                     "source": source,
@@ -1066,12 +1067,12 @@ class EventBot:
                     clean_title_deterministic(title_raw)
                     or strip_emoji(dedup_title(title_raw))[:120]
                 )
-
+                city_from_title = extract_city_from_title(title_raw)
                 events.append(
                     {
                         "title": title_clean,
                         "date": format_date(dt),
-                        "location": extract_location(context) or "",
+                        "location": extract_location(context) or city_from_title or "",
                         "venue": extract_venue(context),
                         "link": href,
                         "source": site["name"],
@@ -1116,7 +1117,7 @@ async def main():
         # Убираем дубли по заголовку
         unique, seen = [], set()
         for e in events:
-            key = (e.get("title", "")[:60]).lower()
+            key = re.sub(r"\s+", " ", e.get("title", "")).strip().lower()
             if key and key not in seen:
                 unique.append(e)
                 seen.add(key)
