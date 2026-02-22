@@ -100,6 +100,42 @@ def strip_intro_phrases(text: str) -> str:
 
 
 
+def extract_short_title(text: str) -> Optional[str]:
+    text = strip_emoji(text).strip()
+
+    if not text:
+        return None
+
+    # 1️⃣ если текст склеен дважды — убираем повтор
+    half = len(text) // 2
+    for i in range(10, half):
+        if text[i:].strip() == text[:len(text)-i].strip():
+            text = text[:len(text)-i].strip()
+            break
+
+    # 2️⃣ режем по первой точке
+    title = re.split(r"[.!?]", text)[0]
+
+    # 3️⃣ стоп-слова (начало описания)
+    stop_words = ["кажд", "если", "что тебя", "на встрече", "мероприятие будет"]
+    low = title.lower()
+    for w in stop_words:
+        idx = low.find(w)
+        if idx > 20:
+            title = title[:idx]
+            break
+
+    # 4️⃣ если есть длинная строка с двоеточием — оставляем левую часть
+    if len(title) > 80 and ":" in title:
+        title = title.split(":")[0]
+
+    # 5️⃣ ограничение длины
+    if len(title) > 120:
+        title = title[:120]
+
+    return title.strip(" -–•,")
+
+
 
 
 
@@ -978,25 +1014,9 @@ class EventBot:
                 # Определяем заголовок корректно
                 raw_title = ""
 
-                for ln in text.split("\n"):
-                    ln = strip_emoji(ln).strip()
-                    if len(ln) > 10:
-                        raw_title = ln
-                        break
-
+                raw_title = extract_short_title(text)
                 if not raw_title:
                     continue
-
-                # Берём только первое предложение
-                raw_title = re.split(r"[.!?]\s", raw_title)[0]
-
-                # Если слишком длинный — режем
-                if len(raw_title) > 140:
-                    raw_title = raw_title[:140]
-
-                # Если есть двоеточие и текст длинный — оставляем только левую часть
-                if len(raw_title) > 80 and ":" in raw_title:
-                    raw_title = raw_title.split(":")[0]
 
                 city_from_title = extract_city_from_title(raw_title)
 
