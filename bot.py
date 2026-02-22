@@ -35,7 +35,7 @@ MESSAGE_THREAD_ID = int(os.getenv("MESSAGE_THREAD_ID", "4"))
 
 def remove_city_from_title(title: str) -> str:
     for city_key in KZ_CITIES.keys():
-        pattern = re.compile(rf"\b{city_key}\b", re.IGNORECASE)
+        pattern = re.compile(rf"{city_key}", re.IGNORECASE)
         title = pattern.sub("", title)
 
     title = re.sub(r"\s{2,}", " ", title)
@@ -375,7 +375,6 @@ KZ_CITIES = {
     "атырау": "Атырау",
     "жезказган": "Жезқазған",
     "жезқазған": "Жезқазған",
-    "петропавловск": "Петропавловск",
     "актау": "Актау",
     "онлайн": "Онлайн",
     "online": "Онлайн",
@@ -573,36 +572,7 @@ def strip_leading_datetime_from_title(title: str) -> str:
 
 
 
-def generate_explanation(title: str, full_text: str) -> Optional[str]:
-    t = full_text.lower()
 
-    # 1️⃣ Для кого
-    m = re.search(r"(для\s+[^\.\n]+)", t)
-    if m:
-        phrase = m.group(1)
-        phrase = re.sub(r"(приглашаем|состоится|будет|проводится)", "", phrase)
-        return phrase.strip().capitalize()
-
-    # 2️⃣ Как ...
-    m = re.search(r"(как\s+[^\.\n]+)", t)
-    if m:
-        return m.group(1).strip().capitalize()
-
-    # 3️⃣ О ...
-    m = re.search(r"(о\s+[^\.\n]+)", t)
-    if m:
-        return m.group(1).strip().capitalize()
-
-    # 4️⃣ Профориентация
-    if "профориентац" in t:
-        return "Карьерная навигация для школьников и студентов"
-
-    # 5️⃣ ИИ + отрасли
-    if "искусствен" in t or "ии" in t:
-        if "бухгалтер" in t and "прав" in t:
-            return "Как ИИ меняет бухгалтерию и право"
-
-    return None
 
 
 
@@ -631,7 +601,7 @@ def clean_title_deterministic(raw_title: str) -> Optional[str]:
     if looks_like_description(s):
         return None
 
-    return s
+    return s[:120]
 
 
 
@@ -641,14 +611,16 @@ def clean_title_deterministic(raw_title: str) -> Optional[str]:
 
 # ─── Parse glued line: "09 Фев, 17:00Шымкент Название" ───────────────────────
 
+city_pattern = "|".join([re.escape(v) for v in KZ_CITIES.values()])
+
 _GLUE_RE = re.compile(
-    r"^(\d{1,2})\s+"                      # day
-    r"([А-ЯЁа-яёA-Za-z]{3,})"             # month
-    r"[,\s]+"
-    r"(\d{1,2}:\d{2})"                    # time
-    r"\s*"
-    r"(?:(Онлайн|online|zoom|Алматы|Астана|Шымкент|Жезказган|Жезқазған|Караганда|Костанай|Павлодар|Семей|Атырау|Актау|Актобе|Тараз|Кызылорда)\s*)?"
-    r"(.+)$",                             # title rest
+    rf"^(\d{{1,2}})\s+"
+    rf"([А-ЯЁа-яёA-Za-z]{{3,}})"
+    rf"[,\\s]+"
+    rf"(\d{{1,2}}:\d{{2}})"
+    rf"\s*"
+    rf"(?:(Онлайн|online|zoom|{city_pattern})\s*)?"
+    rf"(.+)$",
     re.IGNORECASE,
 )
 
@@ -837,7 +809,7 @@ class EventBot:
 
             ctx = line + " " + (lines[i + 1] if i + 1 < len(lines) else "")
             location = extract_location(ctx) or extract_location(text)
-            city_from_title = extract_city_from_title(title_raw)
+
             title_clean = clean_title_deterministic(title_raw) or dedup_title(title_raw[:120])
             if not title_clean:
                 i += 1
@@ -847,7 +819,7 @@ class EventBot:
                 {
                     "title": title_clean,
                     "date": format_date(dt, time_str),
-                    "location": extract_location(text) or city_from_title or "",
+                    "location": location or "",
                     "venue": extract_venue(ctx),
                     "link": link or post_link,
                     "source": source,
@@ -962,8 +934,6 @@ class EventBot:
                 city_from_title = extract_city_from_title(raw_title)
 
                 title = clean_title_deterministic(raw_title)
-
-                
                 if not title:
                     continue
 
@@ -1098,12 +1068,12 @@ class EventBot:
                     clean_title_deterministic(title_raw)
                     or strip_emoji(dedup_title(title_raw))[:120]
                 )
-                city_from_title = extract_city_from_title(title_raw)
+
                 events.append(
                     {
                         "title": title_clean,
                         "date": format_date(dt),
-                        "location": extract_location(context) or city_from_title or "",
+                        "location": extract_location(context) or "",
                         "venue": extract_venue(context),
                         "link": href,
                         "source": site["name"],
@@ -1148,7 +1118,7 @@ async def main():
         # Убираем дубли по заголовку
         unique, seen = [], set()
         for e in events:
-            key = re.sub(r"\s+", " ", e.get("title", "")).strip().lower()
+            key = (e.get("title", "")[:60]).lower()
             if key and key not in seen:
                 unique.append(e)
                 seen.add(key)
