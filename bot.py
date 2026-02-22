@@ -37,16 +37,27 @@ MESSAGE_THREAD_ID = int(os.getenv("MESSAGE_THREAD_ID", "4"))
 
 
 
-# OCR
+import cv2
+import numpy as np
+import pytesseract
+from PIL import Image
+import io
+import re
 
-DATE_HINTS = [
-    "202", "янв", "фев", "мар", "апр", "май", "июн",
-    "июл", "авг", "сен", "окт", "ноя", "дек",
-    "january", "february", "march", "april", "may",
-    "june", "july", "august", "september", "october",
-    "november", "december",
-    ":", ".", "-"
-]
+
+
+
+
+
+#       OCR
+
+DATE_REGEX = re.compile(
+    r"\b\d{1,2}[:.]\d{2}\b|"           # 16:00
+    r"\b\d{1,2}\s*(янв|фев|мар|апр|май|июн|июл|авг|сен|окт|ноя|дек)\b|"
+    r"\b\d{4}\b|"
+    r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\b",
+    re.IGNORECASE
+)
 
 
 async def smart_crop_text_zones(session, image_url: str):
@@ -60,46 +71,50 @@ async def smart_crop_text_zones(session, image_url: str):
         img = np.array(pil_img)
 
         h, w, _ = img.shape
-
-        # OCR
         gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        ocr_data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
 
-        top_text_boxes = []
-        bottom_text_boxes = []
-
-        for i in range(len(ocr_data["text"])):
-            text = ocr_data["text"][i].lower().strip()
-            if not text:
-                continue
-
-            if any(hint in text for hint in DATE_HINTS):
-                x = ocr_data["left"][i]
-                y = ocr_data["top"][i]
-                bw = ocr_data["width"][i]
-                bh = ocr_data["height"][i]
-
-                if y < h * 0.35:
-                    top_text_boxes.append((x, y, bw, bh))
-                elif y > h * 0.65:
-                    bottom_text_boxes.append((x, y, bw, bh))
+        ocr = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
 
         crop_top = 0
         crop_bottom = h
 
-        if top_text_boxes:
-            max_y = max(y + bh for (_, y, _, bh) in top_text_boxes)
-            crop_top = int(max_y + 20)
+        detected_top = []
+        detected_bottom = []
 
-        if bottom_text_boxes:
-            min_y = min(y for (_, y, _, _) in bottom_text_boxes)
-            crop_bottom = int(min_y - 20)
+        for i, text in enumerate(ocr["text"]):
+            text = text.strip()
+            if not text:
+                continue
 
-        # защита от полного уничтожения картинки
-        if crop_bottom - crop_top < h * 0.4:
+            if DATE_REGEX.search(text):
+                y = ocr["top"][i]
+                bh = ocr["height"][i]
+
+                # верхняя зона
+                if y < h * 0.45:
+                    detected_top.append(y + bh)
+
+                # нижняя зона
+                if y > h * 0.55:
+                    detected_bottom.append(y)
+
+        # ───── вычисляем зоны обрезки ─────
+
+        if detected_top:
+            crop_top = max(detected_top) + 30  # запас вниз
+
+        if detected_bottom:
+            crop_bottom = min(detected_bottom) - 30  # запас вверх
+
+        # защита от слишком сильного обрезания
+        if crop_bottom - crop_top < h * 0.45:
             return None
 
         cropped = img[crop_top:crop_bottom, 0:w]
+
+        # если вдруг пусто
+        if cropped.size == 0:
+            return None
 
         final_img = Image.fromarray(cropped)
         buffer = io.BytesIO()
@@ -111,10 +126,6 @@ async def smart_crop_text_zones(session, image_url: str):
     except Exception as e:
         print("OCR crop error:", e)
         return None
-    
-
-
-
 
 
 
