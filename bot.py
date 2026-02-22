@@ -573,7 +573,36 @@ def strip_leading_datetime_from_title(title: str) -> str:
 
 
 
+def generate_explanation(title: str, full_text: str) -> Optional[str]:
+    t = full_text.lower()
 
+    # 1️⃣ Для кого
+    m = re.search(r"(для\s+[^\.\n]+)", t)
+    if m:
+        phrase = m.group(1)
+        phrase = re.sub(r"(приглашаем|состоится|будет|проводится)", "", phrase)
+        return phrase.strip().capitalize()
+
+    # 2️⃣ Как ...
+    m = re.search(r"(как\s+[^\.\n]+)", t)
+    if m:
+        return m.group(1).strip().capitalize()
+
+    # 3️⃣ О ...
+    m = re.search(r"(о\s+[^\.\n]+)", t)
+    if m:
+        return m.group(1).strip().capitalize()
+
+    # 4️⃣ Профориентация
+    if "профориентац" in t:
+        return "Карьерная навигация для школьников и студентов"
+
+    # 5️⃣ ИИ + отрасли
+    if "искусствен" in t or "ии" in t:
+        if "бухгалтер" in t and "прав" in t:
+            return "Как ИИ меняет бухгалтерию и право"
+
+    return None
 
 
 
@@ -602,7 +631,7 @@ def clean_title_deterministic(raw_title: str) -> Optional[str]:
     if looks_like_description(s):
         return None
 
-    return s[:120]
+    return s
 
 
 
@@ -933,6 +962,14 @@ class EventBot:
                 city_from_title = extract_city_from_title(raw_title)
 
                 title = clean_title_deterministic(raw_title)
+
+                explanation = generate_explanation(title, text)
+
+                if explanation:
+                    if explanation.lower() not in title.lower():
+                        title = f"{title} — {explanation}"
+
+
                 if not title:
                     continue
 
@@ -1067,6 +1104,11 @@ class EventBot:
                     clean_title_deterministic(title_raw)
                     or strip_emoji(dedup_title(title_raw))[:120]
                 )
+                explanation = generate_explanation(title, context)
+
+                if explanation:
+                    if explanation.lower() not in title.lower():
+                        title = f"{title} — {explanation}"
                 city_from_title = extract_city_from_title(title_raw)
                 events.append(
                     {
