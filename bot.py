@@ -1056,6 +1056,56 @@ class EventBot:
             logger.error(f"fetch {url}: {e}")
             return ""
 
+
+
+
+
+
+
+    async def fetch_page_metadata(self, url: str) -> Dict:
+        try:
+            html = await self.fetch(url)
+            if not html:
+                return {}
+
+            soup = BeautifulSoup(html, "html.parser")
+
+            result = {}
+
+            # og:title
+            og_title = soup.find("meta", property="og:title")
+            if og_title and og_title.get("content"):
+                result["title"] = og_title["content"].strip()
+
+            # обычный <title>
+            if not result.get("title") and soup.title and soup.title.string:
+                result["title"] = soup.title.string.strip()
+
+            # og:description
+            og_desc = soup.find("meta", property="og:description")
+            if og_desc and og_desc.get("content"):
+                result["description"] = og_desc["content"].strip()
+
+            # meta description
+            if not result.get("description"):
+                meta_desc = soup.find("meta", attrs={"name": "description"})
+                if meta_desc and meta_desc.get("content"):
+                    result["description"] = meta_desc["content"].strip()
+
+            return result
+
+        except Exception as e:
+            logger.error(f"metadata error {url}: {e}")
+            return {}
+
+
+
+
+
+
+
+
+
     # ── Digest parsing ───────────────────────────────────────────────────────
 
     def parse_digest(self, text: str, post_link: str, source: str, image_url: str) -> List[Dict]:
@@ -1253,15 +1303,32 @@ class EventBot:
                 tm2 = re.search(r"\d{1,2}\s+[а-яёА-ЯЁ]{3,}[,\s]+(\d{1,2}:\d{2})", text)
                 time_str = tm2.group(1) if tm2 else None
 
+                # 🔥 Если есть внешний источник — улучшаем текст
+                full_text_final = text
+                title_final = title
+
+                if external_link:
+                    meta = await self.fetch_page_metadata(external_link)
+
+                    if meta.get("title") and len(meta["title"]) > 10:
+                        clean_meta_title = clean_title_deterministic(meta["title"])
+                        if clean_meta_title:
+                            title_final = clean_meta_title
+
+                    if meta.get("description") and len(meta["description"]) > 50:
+                        full_text_final = meta["description"]
+
+                    await asyncio.sleep(0.5)  # защита от перегрузки сайтов
+
                 all_events.append(
                     {
-                        "title": title,
+                        "title": title_final,
                         "date": format_date(dt, time_str),
                         "location": extract_location(text) or city_from_title or "",
                         "venue": extract_venue(text),
                         "link": final_link,
                         "source": channel["name"],
-                        "full_text": text,
+                        "full_text": full_text_final,
                         "image_url": image_url,
                     }
                 )
