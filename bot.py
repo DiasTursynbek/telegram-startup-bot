@@ -251,6 +251,46 @@ def extract_program_block(full_text: str) -> str:
 
 
 
+def smart_cut_title(text: str) -> str:
+    """
+    Оставляет логически завершённую часть текста:
+    - режет по первому завершённому предложению
+    - убирает дату/время
+    - не даёт заголовку быть слишком длинным
+    """
+
+    text = normalize_glued_text(text)
+
+    # Убираем дату в начале
+    text = strip_leading_datetime_from_title(text)
+
+    # Убираем время 16:00
+    text = re.sub(r"\b\d{1,2}:\d{2}\b", "", text)
+
+    # Убираем даты вида 26 февраля 2026
+    text = re.sub(r"\b\d{1,2}\s+[а-яё]+(?:\s+\d{4})?\b", "", text, flags=re.IGNORECASE)
+
+    text = re.sub(r"\s{2,}", " ", text).strip()
+
+    # 🔥 режем по первому завершённому предложению
+    sentence_match = re.match(r"(.+?[.!?])\s", text)
+    if sentence_match:
+        text = sentence_match.group(1)
+
+    # защита от слишком длинного текста
+    if len(text) > 160:
+        text = text[:160].rsplit(" ", 1)[0] + "..."
+
+    return text.strip(" -–•,")
+
+
+
+
+
+
+
+
+
 
 
 
@@ -892,7 +932,7 @@ def clean_title_deterministic(raw_title: str) -> Optional[str]:
     if looks_like_description(s):
         return None
 
-    return s[:120]
+    return smart_cut_title(s)
 
 
 
@@ -1056,6 +1096,45 @@ class EventBot:
             logger.error(f"fetch {url}: {e}")
             return ""
 
+
+
+
+
+
+
+    async def fetch_page_metadata(self, url: str) -> Dict:
+        """
+        Пытаемся получить нормальный title и description со страницы.
+        """
+
+        html = await self.fetch(url)
+        if not html:
+            return {}
+
+        soup = BeautifulSoup(html, "html.parser")
+
+        result = {}
+
+        # ── title ─────────────────────────────
+        og_title = soup.find("meta", property="og:title")
+        if og_title and og_title.get("content"):
+            result["title"] = og_title["content"].strip()
+
+        if not result.get("title"):
+            if soup.title and soup.title.string:
+                result["title"] = soup.title.string.strip()
+
+        # ── description ───────────────────────
+        og_desc = soup.find("meta", property="og:description")
+        if og_desc and og_desc.get("content"):
+            result["description"] = og_desc["content"].strip()
+
+        if not result.get("description"):
+            meta_desc = soup.find("meta", attrs={"name": "description"})
+            if meta_desc and meta_desc.get("content"):
+                result["description"] = meta_desc["content"].strip()
+
+        return result
     # ── Digest parsing ───────────────────────────────────────────────────────
 
     def parse_digest(self, text: str, post_link: str, source: str, image_url: str) -> List[Dict]:
@@ -1252,8 +1331,20 @@ class EventBot:
 
                 tm2 = re.search(r"\d{1,2}\s+[а-яёА-ЯЁ]{3,}[,\s]+(\d{1,2}:\d{2})", text)
                 time_str = tm2.group(1) if tm2 else None
+                    # 🔥 Если есть внешний источник — пробуем получить нормальный текст
+                if external_link:
+                    meta = await self.fetch_page_metadata(external_link)
 
-                all_events.append(
+                    if meta.get("title") and len(meta["title"]) > 10:
+                        title = clean_title_deterministic(meta["title"])
+
+                    if meta.get("description"):
+                        full_text = meta["description"]
+                    else:
+                        full_text = text
+                else:
+                    full_text = text
+                    all_events.append(
                     {
                         "title": title,
                         "date": format_date(dt, time_str),
@@ -1261,7 +1352,7 @@ class EventBot:
                         "venue": extract_venue(text),
                         "link": final_link,
                         "source": channel["name"],
-                        "full_text": text,
+                        "full_text": full_text,
                         "image_url": image_url,
                     }
                 )
