@@ -686,7 +686,7 @@ def strip_emoji(s: str) -> str:
 def is_future(dt: Optional[datetime]) -> bool:
     if not dt:
         return False
-    return dt.date() > datetime.now().date()
+    return dt.date() >= datetime.now().date()
 
 
 def parse_date(text: str) -> Optional[datetime]:
@@ -795,8 +795,21 @@ def extract_venue(text: str) -> Optional[str]:
 
 
 def is_real_event(text: str) -> bool:
+    if not text:
+        return False
+
     t = text.lower()
-    return (any(w in t for w in EVENT_WORDS) and not any(w in t for w in NOT_EVENT_WORDS))
+
+    # если есть дата — уже хороший признак события
+    has_date = bool(re.search(
+        r"\d{1,2}\s+(январ|феврал|март|апрел|мая|июн|июл|август|сентябр|октябр|ноябр|декабр)",
+        t
+    ))
+
+    has_event_word = any(w in t for w in EVENT_WORDS)
+    is_not_news = any(w in t for w in NOT_EVENT_WORDS)
+
+    return (has_event_word or has_date) and not is_not_news
 
 
 def is_site_trash(title: str) -> bool:
@@ -1500,7 +1513,7 @@ async def main():
         # Убираем дубли по заголовку
         unique, seen = [], set()
         for e in events:
-            key = (e.get("title", "")[:60]).lower()
+            key = normalize_link(e.get("link", "")) or e.get("title", "").lower()
             if key and key not in seen:
                 unique.append(e)
                 seen.add(key)
