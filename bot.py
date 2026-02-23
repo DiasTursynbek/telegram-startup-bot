@@ -21,7 +21,6 @@ from PIL import Image
 
 
 
-
 STATE_DIR = Path("state")
 POSTED_FILE = STATE_DIR / "load_posted.json"
 
@@ -444,6 +443,32 @@ def strip_leading_datetime_from_title(title: str) -> str:
     t = re.sub(r"^\s*\d{1,2}\.\d{2}(?:\.\d{4})?\s*", "", t)
     return t.strip(" -–•.,").strip()
 
+def remove_dates_and_times(text: str) -> str:
+    if not text:
+        return ""
+
+    # 1. Время (например: 19:00, 19:00-21:00, 7 PM)
+    text = re.sub(r'\b\d{1,2}:\d{2}(?:-\d{1,2}:\d{2})?(?:\s*[aApP][mM])?\b', '', text)
+    
+    # 2. Даты на русском (например: 28 февраля 2026, 28 фев)
+    text = re.sub(r'\b\d{1,2}\s+(?:янв[а-я]*|фев[а-я]*|мар[а-я]*|апр[а-я]*|мая|май|июн[а-я]*|июл[а-я]*|авг[а-я]*|сен[а-я]*|окт[а-я]*|ноя[а-я]*|дек[а-я]*)\s*(?:,?\s*\d{4})?\b', '', text, flags=re.IGNORECASE)
+    
+    # 3. Даты на английском (например: Feb 28, 2026 или 28 February)
+    text = re.sub(r'\b(?:jan[a-z]*|feb[a-z]*|mar[a-z]*|apr[a-z]*|may|jun[a-z]*|jul[a-z]*|aug[a-z]*|sep[a-z]*|oct[a-z]*|nov[a-z]*|dec[a-z]*)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*\d{4})?\b', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b\d{1,2}\s+(?:jan[a-z]*|feb[a-z]*|mar[a-z]*|apr[a-z]*|may|jun[a-z]*|jul[a-z]*|aug[a-z]*|sep[a-z]*|oct[a-z]*|nov[a-z]*|dec[a-z]*)\s*(?:,?\s*\d{4})?\b', '', text, flags=re.IGNORECASE)
+    
+    # 4. Числовые даты (например: 28.02.2026, 28/02)
+    text = re.sub(r'\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b', '', text)
+    
+    # 5. Чистим мусор, который остался после удаления (запятые перед пайпами, двойные пробелы)
+    text = re.sub(r',\s*\|', ' |', text) 
+    text = re.sub(r'\|\s*\|', '|', text)
+    text = re.sub(r'\s{2,}', ' ', text)
+    
+    return text.strip(" -–•.,|")
+
+
+
 def clean_title_deterministic(raw_title: str) -> Optional[str]:
     s = strip_leading_datetime_from_title(raw_title)
     s = remove_weekday_from_start(s)
@@ -501,6 +526,7 @@ def parse_glued_line(line: str) -> Optional[Dict]:
 
 
 # ─── Formatting post ───────────────────────────────────────
+# ─── Formatting post ───────────────────────────────────────
 def make_post(event: Dict) -> str:
     title = (event.get("title") or "").strip()
     date_str = (event.get("date") or "").strip()
@@ -513,7 +539,6 @@ def make_post(event: Dict) -> str:
     venue = event.get("venue", "")
     title = strip_leading_datetime_from_title(title)
 
-    # 1️⃣ Достаем описание
     deep_description = event.get("deep_description", "")
     program_block = extract_program_block(event.get("full_text", ""))
 
@@ -527,24 +552,21 @@ def make_post(event: Dict) -> str:
     if not description:
         description = generate_fallback_description(title)
 
-    # 🔥 2️⃣ НОВАЯ ЛОГИКА: Отрезаем "хвост" описания от заголовка
     if description:
-        # Берем первые 25 символов описания (очистив от эмодзи)
         desc_clean = strip_emoji(description).strip()
         desc_prefix = desc_clean[:25]
         
-        # Если префикс достаточно длинный, ищем его внутри заголовка
         if len(desc_prefix) > 15:
             idx = title.lower().find(desc_prefix.lower())
-            
-            # Если описание прилипло к заголовку (но не является самим заголовком)
             if idx > 3:
-                # Отрезаем заголовок ровно до начала описания
                 title = title[:idx].strip(" -–•.,:;|")
-                
-                # На всякий случай еще раз сбриваем висячие предлоги в конце
                 title = re.sub(r'\s+(в|на|с|и|для|от|за|к|по|из|у|о|об|at|in|on|for|and|to|the)\s*$', '', title, flags=re.IGNORECASE)
                 title = title.strip()
+
+    # 🔥 НОВОЕ: Тотальная зачистка от дат и времени перед публикацией
+    title = remove_dates_and_times(title)
+    if description:
+        description = remove_dates_and_times(description)
 
     # 3️⃣ Собираем финальный текст
     lines = [f"🎯 <b>{title}</b>"]
