@@ -620,7 +620,6 @@ class EventBot:
 
     # 🔥 НОВАЯ ФУНКЦИЯ ДЛЯ ГЛУБОКОГО ПАРСИНГА САЙТОВ
     async def fetch_event_details(self, url: str) -> str:
-        """Переходит по ссылке и вытягивает главный абзац текста"""
         if not url or not url.startswith("http") or "t.me" in url:
             return ""
 
@@ -629,52 +628,45 @@ class EventBot:
             if not html: return ""
             soup = BeautifulSoup(html, "html.parser")
 
-            # Удаляем технический мусор
             for tag in soup(["script", "style", "nav", "footer", "header", "aside", "menu", "form"]):
                 tag.decompose()
 
-            # 🔥 РАСШИРЕННЫЙ СПИСОК СТОП-СЛОВ (отсекаем заглушки, паркинги и ошибки)
+            # Фразы с твоих скриншотов
             bad_words = [
-                "cookie", "подписаться", "регистрация", "политика", "авторизация", "пароль",
-                "sedo domain", "domain parking", "this webpage was generated", "disclaimer",
-                "cloudflare", "checking your browser", "access denied", "404 not found", "not found",
-                "enable javascript", "captcha", "are you human", "подождите, идет проверка", "ошибка 404"
+                "sedo domain", "domain parking", "webpage was generated", 
+                "website is for sale", "source for information", "maintained by the domain owner",
+                "disclaimer", "cloudflare", "access denied", "not found"
             ]
 
-            # Ищем теги параграфов
             paragraphs = soup.find_all("p")
-            
             for p in paragraphs:
                 text = p.get_text(separator=" ", strip=True)
-                
-                # Фильтруем мусорные короткие тексты
-                if len(text) > 80:
+                if len(text) > 60:
                     low = text.lower()
-                    
-                    # Если нашли стоп-слово — это страница-заглушка или капча, бросаем этот сайт!
+                    # Если нашли хоть одно совпадение со шлаком - возвращаем пустоту
                     if any(bad in low for bad in bad_words):
-                        return "" # Сразу выходим, пусть использует старое доброе описание из Telegram
+                        logger.warning(f"⚠️ Обнаружен мусорный текст на {url}, пропускаем.")
+                        return ""
                     
-                    # Причесываем текст
-                    text = re.sub(r"\s{2,}", " ", text)
-                    
-                    # Красиво обрезаем, если текст слишком длинный
-                    words = text.split()
-                    if len(words) > 40:
-                        return " ".join(words[:40]) + "..."
-                    
-                    return text
+                    # Если текст на английском, а ивент в Казахстане (простая проверка на латиницу)
+                    # Это поможет отсечь англоязычный спам на припаркованных доменах
+                    latin_only = re.fullmatch(r'[A-Za-z0-9\s\.,!\?\-\(\)]+', text)
+                    if latin_only and len(text) > 100:
+                        return ""
 
-            # Фолбек: ищем мета-описание (SEO)
+                    text = re.sub(r"\s{2,}", " ", text)
+                    words = text.split()
+                    return " ".join(words[:40]) + "..." if len(words) > 40 else text
+
+            # Проверка мета-тега description
             meta_desc = soup.find("meta", attrs={"name": "description"})
             if meta_desc and meta_desc.get("content"):
                 desc = meta_desc["content"].strip()
-                # Проверяем и мета-описание на мусор!
-                if len(desc) > 50 and not any(bad in desc.lower() for bad in bad_words):
+                if not any(bad in desc.lower() for bad in bad_words):
                     return desc
                     
-        except Exception as e:
-            logger.error(f"Error deep parsing {url}: {e}")
+        except Exception:
+            pass
             
         return ""
 
