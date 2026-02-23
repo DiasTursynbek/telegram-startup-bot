@@ -525,7 +525,7 @@ def parse_glued_line(line: str) -> Optional[Dict]:
     return {"dt": dt, "time_str": time_str, "city": city, "title_raw": title_raw[:300], "date_formatted": format_date(dt, time_str)}
 
 
-# ─── Formatting post ───────────────────────────────────────
+
 # ─── Formatting post ───────────────────────────────────────
 def make_post(event: Dict) -> str:
     title = (event.get("title") or "").strip()
@@ -633,6 +633,14 @@ class EventBot:
             for tag in soup(["script", "style", "nav", "footer", "header", "aside", "menu", "form"]):
                 tag.decompose()
 
+            # 🔥 РАСШИРЕННЫЙ СПИСОК СТОП-СЛОВ (отсекаем заглушки, паркинги и ошибки)
+            bad_words = [
+                "cookie", "подписаться", "регистрация", "политика", "авторизация", "пароль",
+                "sedo domain", "domain parking", "this webpage was generated", "disclaimer",
+                "cloudflare", "checking your browser", "access denied", "404 not found", "not found",
+                "enable javascript", "captcha", "are you human", "подождите, идет проверка", "ошибка 404"
+            ]
+
             # Ищем теги параграфов
             paragraphs = soup.find_all("p")
             
@@ -642,8 +650,10 @@ class EventBot:
                 # Фильтруем мусорные короткие тексты
                 if len(text) > 80:
                     low = text.lower()
-                    if any(bad in low for bad in ["cookie", "подписаться", "регистрация", "политика", "авторизация", "пароль"]):
-                        continue
+                    
+                    # Если нашли стоп-слово — это страница-заглушка или капча, бросаем этот сайт!
+                    if any(bad in low for bad in bad_words):
+                        return "" # Сразу выходим, пусть использует старое доброе описание из Telegram
                     
                     # Причесываем текст
                     text = re.sub(r"\s{2,}", " ", text)
@@ -659,7 +669,8 @@ class EventBot:
             meta_desc = soup.find("meta", attrs={"name": "description"})
             if meta_desc and meta_desc.get("content"):
                 desc = meta_desc["content"].strip()
-                if len(desc) > 50:
+                # Проверяем и мета-описание на мусор!
+                if len(desc) > 50 and not any(bad in desc.lower() for bad in bad_words):
                     return desc
                     
         except Exception as e:
