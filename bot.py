@@ -499,6 +499,7 @@ def parse_glued_line(line: str) -> Optional[Dict]:
 
     return {"dt": dt, "time_str": time_str, "city": city, "title_raw": title_raw[:300], "date_formatted": format_date(dt, time_str)}
 
+
 # ─── Formatting post ───────────────────────────────────────
 def make_post(event: Dict) -> str:
     title = (event.get("title") or "").strip()
@@ -512,12 +513,8 @@ def make_post(event: Dict) -> str:
     venue = event.get("venue", "")
     title = strip_leading_datetime_from_title(title)
 
-    lines = [f"🎯 <b>{title}</b>"]
-
-    # 🔥 1️⃣ Сначала проверяем: спарсили ли мы глубокое описание со страницы
+    # 1️⃣ Достаем описание
     deep_description = event.get("deep_description", "")
-    
-    # 2️⃣ Блок "Что тебя ждет"
     program_block = extract_program_block(event.get("full_text", ""))
 
     if deep_description:
@@ -525,12 +522,32 @@ def make_post(event: Dict) -> str:
     elif program_block:
         description = program_block
     else:
-        # 3️⃣ Универсальное описание
         description = generate_universal_description(event.get("full_text", ""), title)
 
-    # 4️⃣ Фолбек
     if not description:
         description = generate_fallback_description(title)
+
+    # 🔥 2️⃣ НОВАЯ ЛОГИКА: Отрезаем "хвост" описания от заголовка
+    if description:
+        # Берем первые 25 символов описания (очистив от эмодзи)
+        desc_clean = strip_emoji(description).strip()
+        desc_prefix = desc_clean[:25]
+        
+        # Если префикс достаточно длинный, ищем его внутри заголовка
+        if len(desc_prefix) > 15:
+            idx = title.lower().find(desc_prefix.lower())
+            
+            # Если описание прилипло к заголовку (но не является самим заголовком)
+            if idx > 3:
+                # Отрезаем заголовок ровно до начала описания
+                title = title[:idx].strip(" -–•.,:;|")
+                
+                # На всякий случай еще раз сбриваем висячие предлоги в конце
+                title = re.sub(r'\s+(в|на|с|и|для|от|за|к|по|из|у|о|об|at|in|on|for|and|to|the)\s*$', '', title, flags=re.IGNORECASE)
+                title = title.strip()
+
+    # 3️⃣ Собираем финальный текст
+    lines = [f"🎯 <b>{title}</b>"]
 
     if description:
         lines.append("")
@@ -543,7 +560,8 @@ def make_post(event: Dict) -> str:
     else:
         lines.append("🇰🇿 Казахстан")
 
-    if venue: lines.append(f"📍 {venue}")
+    if venue: 
+        lines.append(f"📍 {venue}")
 
     lines.append(f"📅 {date_str}")
     lines.append(f"🔗 <a href='{link}'>Читать →</a>")
