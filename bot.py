@@ -71,9 +71,9 @@ def extract_city_from_title(title: str) -> Optional[str]:
 
 def is_clean_photo(url: str) -> bool:
     url = url.lower()
+    
     blacklist = [
-        "banner", "poster", "event", "flyer",
-        "afisha", "1080x", "square", "card",
+        "icon", "logo", "avatar", "thumbnail", "svg", "button", "background", "footer"
     ]
     return not any(word in url for word in blacklist)
 
