@@ -41,16 +41,26 @@ def strip_intro_phrases(text: str) -> str:
 
 def remove_city_from_title(title: str) -> str:
     for city_key in KZ_CITIES.keys():
-        pattern = re.compile(rf"(?i)(^|\s|[^\wа-яА-ЯёЁa-zA-Z]){city_key}(?=[^\wа-яА-ЯёЁa-zA-Z]|\s|$)")
-        title = pattern.sub(r"\1", title)
+        # Убиваем город в самом начале строки (даже если там знаки препинания)
+        title = re.sub(rf"^[^\wа-яА-ЯёЁa-zA-Z]*{city_key}\b", "", title, flags=re.IGNORECASE)
+        # Убиваем город, если он где-то в тексте
+        title = re.sub(rf"\b{city_key}\b", "", title, flags=re.IGNORECASE)
+        
+    # Зачищаем двойные пробелы и висячие запятые/тире в начале заголовка
     title = re.sub(r"\s{2,}", " ", title)
-    return title.strip(" -–•,")
+    title = re.sub(r"^[,\-\s]+", "", title) 
+    return title.strip(" -–•:,!")
 
 def fix_glued_words(text: str) -> str:
+    # Гарантированно расклеивает "вQostanai" -> "в Qostanai" и "Hubпройдет" -> "Hub пройдет"
     text = re.sub(r'([а-яёА-ЯЁ])([A-Za-z])', r'\1 \2', text)
     text = re.sub(r'([A-Za-z])([а-яёА-ЯЁ])', r'\1 \2', text)
     text = re.sub(r'([а-яё])([А-ЯЁ])', r'\1 \2', text)
+    
+    # Убираем двойные предлоги, которые могли появиться ("в в Qostanai" -> "в Qostanai")
+    text = re.sub(r'\b(в|на)\s+\1\b', r'\1', text, flags=re.IGNORECASE)
     return text
+
 def extract_city_from_title(title: str) -> Optional[str]:
     lower = title.lower()
     for key, value in KZ_CITIES.items():
@@ -551,14 +561,20 @@ class EventBot:
             logger.error(f"fetch {url}: {e}")
             return ""
 
-    async def fetch_event_details(self, url: str) -> str:
+    async def fetch_event_details(self, url: str) -> Dict[str, str]:
+        result = {"desc": "", "image": ""}
         if not url or not url.startswith("http") or "t.me" in url:
-            return ""
+            return result
 
         try:
             html = await self.fetch(url)
-            if not html: return ""
+            if not html: return result
             soup = BeautifulSoup(html, "html.parser")
+
+            # 🔥 НАХОДИМ ГЛАВНОЕ ФОТО САЙТА (og:image) - Оно 100% качественное!
+            og_image = soup.find("meta", property="og:image")
+            if og_image and og_image.get("content"):
+                result["image"] = og_image["content"]
 
             for tag in soup(["script", "style", "nav", "footer", "header", "aside", "menu", "form"]):
                 tag.decompose()
@@ -570,31 +586,32 @@ class EventBot:
             ]
 
             for text in soup.stripped_strings:
-                if len(text) > 80: 
+                if len(text) > 80:
                     low = text.lower()
                     if any(bad in low for bad in bad_words):
-                        logger.warning(f"⚠️ Обнаружен мусорный текст на {url}, пропускаем.")
-                        return ""
+                        return result
                     
                     latin_only = re.fullmatch(r'[A-Za-z0-9\s\.,!\?\-\(\)]+', text)
                     if latin_only and len(text) > 100:
-                        return ""
+                        return result
 
                     text = re.sub(r"\s{2,}", " ", text)
                     text = re.sub(r'\bв\s+в\b', 'в', text, flags=re.IGNORECASE)
                     
                     words = text.split()
-                    return " ".join(words[:40]) + "..." if len(words) > 40 else text
+                    result["desc"] = " ".join(words[:40]) + "..." if len(words) > 40 else text
+                    break # Нашли хорошее описание, выходим
 
-            meta_desc = soup.find("meta", attrs={"name": "description"})
-            if meta_desc and meta_desc.get("content"):
-                desc = meta_desc["content"].strip()
-                if not any(bad in desc.lower() for bad in bad_words):
-                    return desc
+            if not result["desc"]:
+                meta_desc = soup.find("meta", attrs={"name": "description"})
+                if meta_desc and meta_desc.get("content"):
+                    desc = meta_desc["content"].strip()
+                    if not any(bad in desc.lower() for bad in bad_words):
+                        result["desc"] = desc
         except Exception:
             pass
             
-        return ""
+        return result
 
     def parse_digest(self, text: str, post_link: str, source: str, image_url: str) -> List[Dict]:
         events = []
@@ -819,7 +836,7 @@ class EventBot:
             except Exception:
                 continue
         return events
-
+# ─── main ────────────────────────────────────────────────────────────────────
 async def main():
     logger.info("🚀 Старт...")
     if not BOT_TOKEN:
@@ -851,28 +868,53 @@ async def main():
                 logger.info(f"⏭️ Уже публиковалось: {event.get('title')[:50]}")
                 continue
 
-            deep_desc = await bot_obj.fetch_event_details(norm_link)
-            if deep_desc:
-                event["deep_description"] = deep_desc
-                logger.info(f"Успешно спарсили живое описание по ссылке: {norm_link}")
+            # 🔥 1. Получаем описание и качественное фото
+            details = await bot_obj.fetch_event_details(norm_link)
+            
+            # На случай, если details это словарь (с новым кодом)
+            if isinstance(details, dict):
+                if details.get("desc"):
+                    event["deep_description"] = details["desc"]
+                if details.get("image"):
+                    event["image_url"] = details["image"]
+            # На случай, если details это просто строка (со старым кодом)
+            elif isinstance(details, str) and details:
+                event["deep_description"] = details
 
             text = make_post(event)
             if not text:
                 continue
 
             try:
-                # 🔥 ИСПРАВЛЕНИЕ: Выкинули OCR. Просто берем главное фото как есть.
-                photo_to_send = event.get("image_url")
-
-                if photo_to_send:
-                    await bot_api.send_photo(
-                        chat_id=CHANNEL_ID,
-                        message_thread_id=MESSAGE_THREAD_ID,
-                        photo=photo_to_send,
-                        caption=text,
-                        parse_mode="HTML",
-                    )
+                photo_url = event.get("image_url")
+                
+                if photo_url:
+                    # 🔥 2. НАДЕЖНАЯ ОТПРАВКА: Скачиваем фото в буфер, чтобы Телеграм не капризничал
+                    try:
+                        session = await bot_obj.get_session()
+                        async with session.get(photo_url, timeout=15) as resp:
+                            if resp.status == 200:
+                                photo_bytes = await resp.read()
+                                await bot_api.send_photo(
+                                    chat_id=CHANNEL_ID,
+                                    message_thread_id=MESSAGE_THREAD_ID,
+                                    photo=photo_bytes,
+                                    caption=text,
+                                    parse_mode="HTML",
+                                )
+                            else:
+                                raise Exception("Bad HTTP status for image")
+                    except Exception as img_e:
+                        logger.warning(f"Не удалось скачать фото, отправляем текст. Ошибка: {img_e}")
+                        await bot_api.send_message(
+                            chat_id=CHANNEL_ID,
+                            message_thread_id=MESSAGE_THREAD_ID,
+                            text=text,
+                            parse_mode="HTML",
+                            disable_web_page_preview=True,
+                        )
                 else:
+                    # Если фото вообще не найдено
                     await bot_api.send_message(
                         chat_id=CHANNEL_ID,
                         message_thread_id=MESSAGE_THREAD_ID,
