@@ -511,22 +511,32 @@ def make_post(event: Dict) -> str:
 
     location = event.get("location", "")
     venue = event.get("venue", "")
+    
+    # 🔥 Принудительная зачистка города из заголовка перед сборкой
+    title = remove_city_from_title(title)
     title = strip_leading_datetime_from_title(title)
 
+    # Достаем все варианты описаний
     deep_description = event.get("deep_description", "")
-    # 🔥 ИСПРАВЛЕНИЕ: Сначала ищем крутой вступительный абзац, а только потом списки
-    univ_desc = generate_universal_description(event.get("full_text", ""), title)
-    program_block = extract_program_block(event.get("full_text", ""))
-
-    if deep_description:
+    full_text_raw = event.get("full_text", "")
+    
+    # 1. ПРИОРИТЕТ: Глубокое описание с сайта (теперь оно длинное)
+    if deep_description and len(deep_description) > 40:
         description = deep_description
-    elif univ_desc: 
-        description = univ_desc
-    elif program_block:
-        description = program_block
     else:
+        # 2. ЗАПАСНОЙ: Блок программы из текста канала
+        program_block = extract_program_block(full_text_raw)
+        if program_block and len(program_block) > 40:
+            description = program_block
+        else:
+            # 3. ПОСЛЕДНИЙ ШАНС: Универсальное описание
+            description = generate_universal_description(full_text_raw, title)
+
+    # Если совсем пусто — ставим заглушку по категории
+    if not description:
         description = generate_fallback_description(title)
 
+    # Умная склейка заголовка и описания (чтобы не повторялись)
     if description:
         desc_clean = strip_emoji(description).strip()
         desc_prefix = desc_clean[:25]
@@ -535,19 +545,21 @@ def make_post(event: Dict) -> str:
             idx = title.lower().find(desc_prefix.lower())
             if idx > 3:
                 title = title[:idx].strip(" -–•.,:;|")
+                # Убираем висячие предлоги
                 title = re.sub(r'\s+(в|на|с|и|для|от|за|к|по|из|у|о|об|at|in|on|for|and|to|the)\s*$', '', title, flags=re.IGNORECASE)
-                title = title.strip()
 
-    title = remove_dates_and_times(title)
-    if description:
-        description = remove_dates_and_times(description)
+    # Финальная чистка дат и склеек в заголовке и описании
+    title = fix_glued_words(remove_dates_and_times(title))
+    description = fix_glued_words(remove_dates_and_times(description))
 
+    # Сборка финального текста поста
     lines = [f"🎯 <b>{title}</b>"]
 
     if description:
         lines.append("")
         lines.append(f"📝 {description}")
 
+    # Локация
     if location in ("Онлайн", "Онлайн (Zoom)"):
         lines.append("🌐 Онлайн")
     elif location:
@@ -555,9 +567,11 @@ def make_post(event: Dict) -> str:
     else:
         lines.append("🇰🇿 Казахстан")
 
+    # Площадка
     if venue: 
         lines.append(f"📍 {venue}")
 
+    # Дата и ссылка
     lines.append(f"📅 {date_str}")
     lines.append(f"🔗 <a href='{link}'>Читать →</a>")
 
@@ -598,60 +612,47 @@ class EventBot:
             if not html: return result
             soup = BeautifulSoup(html, "html.parser")
 
-            # 🔥 1. Ищем главное фото (og:image) и исправляем короткие ссылки
+            # Извлекаем главное фото
             og_image = soup.find("meta", property="og:image")
             if og_image and og_image.get("content"):
                 img_url = og_image["content"]
                 if not img_url.startswith("http"):
                     from urllib.parse import urljoin
-                    img_url = urljoin(url, img_url) # Превращаем /media/img.jpg в https://site.com/media/img.jpg
+                    img_url = urljoin(url, img_url)
                 result["image"] = img_url
 
-            # 🔥 2. Запасной план: если og:image пустой, берем первую адекватную картинку со страницы
-            if not result["image"]:
-                for img in soup.find_all("img"):
-                    src = img.get("src") or img.get("data-src")
-                    if src and is_clean_photo(src): # Отсекаем иконки и логотипы
-                        if not src.startswith("http"):
-                            from urllib.parse import urljoin
-                            src = urljoin(url, src)
-                        result["image"] = src
-                        break # Берем первую найденную картинку и останавливаемся
-
+            # Очистка страницы
             for tag in soup(["script", "style", "nav", "footer", "header", "aside", "menu", "form"]):
                 tag.decompose()
 
-            bad_words = [
-                "sedo domain", "domain parking", "webpage was generated", 
-                "website is for sale", "source for information", "maintained by the domain owner",
-                "disclaimer", "cloudflare", "access denied", "not found"
-            ]
+            # 🔥 СОБИРАЕМ ВЕСЬ ТЕКСТ (включая списки)
+            collected_text = []
+            # Ищем внутри основных контейнеров контента
+            content_area = soup.find("main") or soup.find("article") or soup.body
+            
+            if content_area:
+                # Берем параграфы, элементы списков и заголовки
+                for elem in content_area.find_all(['p', 'li', 'h2', 'h3']):
+                    txt = elem.get_text(strip=True)
+                    if len(txt) > 20: # Игнорируем совсем короткие обрывки
+                        collected_text.append(txt)
+            
+            full_desc = " ".join(collected_text)
+            
+            # Чистим от мусора
+            bad_words = ["sedo domain", "website is for sale", "cloudflare", "access denied"]
+            if any(bad in full_desc.lower() for bad in bad_words):
+                return result
 
-            for text in soup.stripped_strings:
-                if len(text) > 80:
-                    low = text.lower()
-                    if any(bad in low for bad in bad_words):
-                        return result
+            full_desc = re.sub(r"\s{2,}", " ", full_desc)
+            
+            # 🔥 УВЕЛИЧЕННЫЙ ЛИМИТ: берем до 80 слов, чтобы влезли условия и призы
+            words = full_desc.split()
+            if words:
+                result["desc"] = " ".join(words[:80]) + "..." if len(words) > 80 else " ".join(words)
                     
-                    latin_only = re.fullmatch(r'[A-Za-z0-9\s\.,!\?\-\(\)]+', text)
-                    if latin_only and len(text) > 100:
-                        return result
-
-                    text = re.sub(r"\s{2,}", " ", text)
-                    text = re.sub(r'\bв\s+в\b', 'в', text, flags=re.IGNORECASE)
-                    
-                    words = text.split()
-                    return " ".join(words[:100]) + "..." if len(words) > 100 else text
-                    break 
-
-            if not result["desc"]:
-                meta_desc = soup.find("meta", attrs={"name": "description"})
-                if meta_desc and meta_desc.get("content"):
-                    desc = meta_desc["content"].strip()
-                    if not any(bad in desc.lower() for bad in bad_words):
-                        result["desc"] = desc
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Error fetching details: {e}")
             
         return result
 
