@@ -498,62 +498,32 @@ def make_post(event: Dict) -> str:
     date_str = (event.get("date") or "").strip()
     link = (event.get("link") or "").strip()
 
-    if not title or len(title) < 5 or not date_str or not link:
+    if not title or not date_str or not link:
         return ""
 
+    # Принудительная очистка заголовка от города
+    title = remove_city_from_title(title)
+    
     location = event.get("location", "")
     venue = event.get("venue", "")
     
-    # 🔥 Принудительная зачистка города из заголовка перед сборкой
-    title = remove_city_from_title(title)
-    title = strip_leading_datetime_from_title(title)
+    # Приоритет отдаем "глубокому" описанию с сайта
+    description = event.get("deep_description", "")
+    if not description or len(description) < 30:
+        description = generate_universal_description(event.get("full_text", ""), title)
 
-    # Достаем все варианты описаний
-    deep_description = event.get("deep_description", "")
-    full_text_raw = event.get("full_text", "")
-    
-    # 1. ПРИОРИТЕТ: Глубокое описание с сайта (теперь оно длинное)
-    if deep_description and len(deep_description) > 40:
-        description = deep_description
-    else:
-        # 2. ЗАПАСНОЙ: Блок программы из текста канала
-        program_block = extract_program_block(full_text_raw)
-        if program_block and len(program_block) > 40:
-            description = program_block
-        else:
-            # 3. ПОСЛЕДНИЙ ШАНС: Универсальное описание
-            description = generate_universal_description(full_text_raw, title)
+    # Убираем даты и время из самого текста описания, чтобы не дублировать
+    description = remove_dates_and_times(description)
+    title = remove_dates_and_times(title)
 
-    # Если совсем пусто — ставим заглушку по категории
-    if not description:
-        description = generate_fallback_description(title)
-
-    # Умная склейка заголовка и описания (чтобы не повторялись)
-    if description:
-        desc_clean = strip_emoji(description).strip()
-        desc_prefix = desc_clean[:25]
-        
-        if len(desc_prefix) > 15:
-            idx = title.lower().find(desc_prefix.lower())
-            if idx > 3:
-                title = title[:idx].strip(" -–•.,:;|")
-                # Убираем висячие предлоги
-                title = re.sub(r'\s+(в|на|с|и|для|от|за|к|по|из|у|о|об|at|in|on|for|and|to|the)\s*$', '', title, flags=re.IGNORECASE)
-
-    # Финальная чистка дат и склеек в заголовке и описании
-    # Перед самой публикацией прогоняем заголовок и описание через финальные фильтры
-    title = fix_glued_words(remove_dates_and_times(remove_city_from_title(title)))
-    if description:
-        description = fix_glued_words(remove_dates_and_times(description))
-
-    # Сборка финального текста поста
+    # Собираем пост по вашему шаблону
     lines = [f"🎯 <b>{title}</b>"]
 
     if description:
         lines.append("")
         lines.append(f"📝 {description}")
 
-    # Локация
+    # Локация и город
     if location in ("Онлайн", "Онлайн (Zoom)"):
         lines.append("🌐 Онлайн")
     elif location:
@@ -561,11 +531,9 @@ def make_post(event: Dict) -> str:
     else:
         lines.append("🇰🇿 Казахстан")
 
-    # Площадка
     if venue: 
         lines.append(f"📍 {venue}")
 
-    # Дата и ссылка
     lines.append(f"📅 {date_str}")
     lines.append(f"🔗 <a href='{link}'>Читать →</a>")
 
@@ -606,7 +574,7 @@ class EventBot:
             if not html: return result
             soup = BeautifulSoup(html, "html.parser")
 
-            # 1. Извлекаем главное фото (og:image)
+            # Находим главное фото (og:image)
             og_image = soup.find("meta", property="og:image")
             if og_image and og_image.get("content"):
                 img_url = og_image["content"]
@@ -615,41 +583,34 @@ class EventBot:
                     img_url = urljoin(url, img_url)
                 result["image"] = img_url
 
-            # Очистка от технического мусора
+            # Очистка страницы
             for tag in soup(["script", "style", "nav", "footer", "header", "aside", "menu", "form"]):
                 tag.decompose()
 
-            # 🔥 2. СОБИРАЕМ СОДЕРЖАТЕЛЬНОЕ ОПИСАНИЕ
-            # Ищем внутри главных контейнеров
-            content_area = soup.find("main") or soup.find("article") or soup.find("div", class_=re.compile(r"content|post|main", re.I)) or soup.body
-            
+            # 🔥 СОБИРАЕМ ТЕКСТ: берем параграфы и элементы списков
             collected_chunks = []
+            content_area = soup.find("main") or soup.find("article") or soup.body
+            
             if content_area:
-                # Берем все параграфы, элементы списков (для призов) и заголовки
-                for elem in content_area.find_all(['p', 'li', 'h2', 'h3']):
+                for elem in content_area.find_all(['p', 'li']):
                     txt = elem.get_text(separator=" ", strip=True)
-                    
-                    # Пропускаем технические строки
-                    if any(bad in txt.lower() for bad in ["войти", "регистрация", "cookie", "все права"]):
-                        continue
-                    
-                    if len(txt) > 30:
+                    # Пропускаем мусорные фразы и слишком короткие строки
+                    if len(txt) > 30 and not any(bad in txt.lower() for bad in ["cookie", "все права", "войти"]):
                         collected_chunks.append(txt)
-                    
-                    # Если набрали достаточно текста (около 3-4 абзацев), выходим
-                    if len(" ".join(collected_chunks).split()) > 100:
+                    # Если набрали 3-4 хороших абзаца, этого хватит для краткого описания
+                    if len(collected_chunks) >= 4:
                         break
-
+            
             full_desc = " ".join(collected_chunks)
-            full_desc = re.sub(r"\s{2,}", " ", full_desc) # Убираем лишние пробелы
-
-            # 🔥 3. ЛИМИТ: Берем до 80 слов (этого хватит, чтобы влезла вся суть)
+            full_desc = re.sub(r"\s{2,}", " ", full_desc)
+            
+            # 🔥 УВЕЛИЧЕННЫЙ ЛИМИТ: берем до 80 слов (чтобы влезли и призы, и спикеры)
             words = full_desc.split()
             if words:
                 result["desc"] = " ".join(words[:80]) + "..." if len(words) > 80 else " ".join(words)
                     
-        except Exception as e:
-            logger.error(f"Error fetching details: {e}")
+        except Exception:
+            pass
             
         return result
 
