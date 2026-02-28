@@ -53,14 +53,19 @@ def remove_city_from_title(title: str) -> str:
     return title.strip(" -–•:,!")
 
 def fix_glued_words(text: str) -> str:
-    # 1. Добавляем пробел после знаков препинания, если его нет (исправит !в)
+    # 🔥 УНИВЕРСАЛЬНО: Отклеиваем ЛЮБОЕ время от ЛЮБЫХ букв с обеих сторон (16:00Костанай -> 16:00 Костанай)
+    text = re.sub(r'(\d{1,2}:\d{2})([А-Яа-яЁёA-Za-z])', r'\1 \2', text)
+    text = re.sub(r'([А-Яа-яЁёA-Za-z])(\d{1,2}:\d{2})', r'\1 \2', text)
+    
+    # Отклеиваем знаки препинания (100!в -> 100! в)
     text = re.sub(r'([!?,.])([А-Яа-яЁёA-Za-z])', r'\1 \2', text)
     
-    # 2. Расклеиваем кириллицу и латиницу (исправит вQostanai и Hubпройдет)
+    # Расклеиваем языки и регистры (вQostanai, Hubпройдет)
     text = re.sub(r'([а-яёА-ЯЁ])([A-Za-z])', r'\1 \2', text)
     text = re.sub(r'([A-Za-z])([а-яёА-ЯЁ])', r'\1 \2', text)
+    text = re.sub(r'([а-яё])([А-ЯЁ])', r'\1 \2', text)
     
-    # 3. Убираем двойные предлоги, если они случайно склеились
+    # Убираем двойные предлоги
     text = re.sub(r'\b(в|на|во)\s+\1\b', r'\1', text, flags=re.IGNORECASE)
     return text
 
@@ -372,8 +377,12 @@ def parse_date(text: str) -> Optional[datetime]:
 
 def format_date(dt: datetime, time_str: str = None) -> str:
     months = {1:"января", 2:"февраля", 3:"марта", 4:"апреля", 5:"мая", 6:"июня", 7:"июля", 8:"августа", 9:"сентября", 10:"октября", 11:"ноября", 12:"декабря"}
-    s = f"{dt.day} {months[dt.month]} {dt.year}"
-    return f"{s}, {time_str}" if time_str else s
+    
+    # 🔥 УНИВЕРСАЛЬНО: Собираем формат "Год День Месяц"
+    s = f"{dt.year} {dt.day} {months[dt.month]}"
+    
+    # Если парсер нашел время, приклеиваем его в конец через пробел
+    return f"{s} {time_str}" if time_str else s
 
 def extract_location(text: str) -> Optional[str]:
     t = text.lower()
@@ -419,9 +428,15 @@ def normalize_glued_text(s: str) -> str:
 def strip_leading_datetime_from_title(title: str) -> str:
     t = strip_emoji(title).strip()
     t = normalize_glued_text(t)
+    
+    # 🔥 УНИВЕРСАЛЬНО: Сносим любое "одинокое" время в начале заголовка (например, "16:00 Идея может стоить...")
+    t = re.sub(r"^\s*\d{1,2}:\d{2}\s*", "", t)
+    
+    # Сносим даты
     t = re.sub(r"^\s*\d{1,2}\s+[А-Яа-яЁёA-Za-z]{3,}[,]?\s+\d{1,2}:\d{2}\s*", "", t, flags=re.IGNORECASE)
     t = re.sub(r"^\s*\d{1,2}\s+[а-яё]{3,}(?:\s+\d{4})?\s*", "", t, flags=re.IGNORECASE)
     t = re.sub(r"^\s*\d{1,2}\.\d{2}(?:\.\d{4})?\s*", "", t)
+    
     return t.strip(" -–•.,").strip()
 
 def remove_dates_and_times(text: str) -> str:
@@ -498,32 +513,71 @@ def make_post(event: Dict) -> str:
     date_str = (event.get("date") or "").strip()
     link = (event.get("link") or "").strip()
 
-    if not title or not date_str or not link:
+    if not title or len(title) < 5 or not date_str or not link:
         return ""
 
-    # Принудительная очистка заголовка от города
-    title = remove_city_from_title(title)
-    
     location = event.get("location", "")
     venue = event.get("venue", "")
     
-    # Приоритет отдаем "глубокому" описанию с сайта
-    description = event.get("deep_description", "")
-    if not description or len(description) < 30:
-        description = generate_universal_description(event.get("full_text", ""), title)
+    # 🔥 1. Принудительная очистка заголовка от города и лишних дат в начале
+    title = remove_city_from_title(title)
+    title = strip_leading_datetime_from_title(title)
 
-    # Убираем даты и время из самого текста описания, чтобы не дублировать
-    description = remove_dates_and_times(description)
-    title = remove_dates_and_times(title)
+    # Достаем сырой текст и текст с сайта
+    full_text_raw = event.get("full_text", "")
+    deep_description = event.get("deep_description", "")
 
-    # Собираем пост по вашему шаблону
-    lines = [f"🎯 <b>{title}</b>"]
+    # 🔥 2. УМНЫЙ ВЫБОР ДАТЫ (ищем финал, а не дедлайн)
+    context = (full_text_raw + " " + deep_description).lower()
+    # Ищем фразы "финал", "питчинг", "дата проведения" и саму дату рядом
+    match = re.search(r"(?:финал|питчинг|дата проведения|состоится)\s*[-—]?\s*(\d{1,2}\s+(?:янв|фев|мар|апр|май|июн|июл|авг|сен|окт|ноя|дек)[а-я]*)", context)
+    
+    if match:
+        parsed_final = parse_date(match.group(1))
+        if parsed_final:
+            # Сохраняем время из оригинальной даты, если оно было
+            tm_match = re.search(r"\d{1,2}:\d{2}", date_str)
+            time_str = tm_match.group(0) if tm_match else None
+            date_str = format_date(parsed_final, time_str)
+
+    # 🔥 3. ПРИОРИТЕТ ОПИСАНИЯ
+    # Берем длинное описание с сайта, если оно есть
+    if deep_description and len(deep_description) > 50:
+        description = deep_description
+    else:
+        # Иначе ищем программу или берем универсальное
+        program_block = extract_program_block(full_text_raw)
+        if program_block and len(program_block) > 40:
+            description = program_block
+        else:
+            description = generate_universal_description(full_text_raw, title)
+
+    # Заглушка, если текста вообще нет
+    if not description:
+        description = generate_fallback_description(title)
+
+    # Убираем дублирование, если описание прилипло к заголовку
+    if description:
+        desc_clean = strip_emoji(description).strip()
+        desc_prefix = desc_clean[:25]
+        if len(desc_prefix) > 15:
+            idx = title.lower().find(desc_prefix.lower())
+            if idx > 3:
+                title = title[:idx].strip(" -–•.,:;|")
+                title = re.sub(r'\s+(в|на|с|и|для|от|за|к|по|из|у|о|об|at|in|on|for|and|to|the)\s*$', '', title, flags=re.IGNORECASE)
+
+    # 🔥 4. ФИНАЛЬНАЯ ЗАЧИСТКА: вырезаем даты из текста и расклеиваем слипшиеся слова
+    title = fix_glued_words(remove_dates_and_times(title))
+    description = fix_glued_words(remove_dates_and_times(description))
+
+    # 🔥 5. СБОРКА ПОСТА ПО ШАБЛОНУ
+    lines = [f"🎯 <b>{title.strip()}</b>"]
 
     if description:
         lines.append("")
-        lines.append(f"📝 {description}")
+        lines.append(f"📝 {description.strip()}")
 
-    # Локация и город
+    # Локация
     if location in ("Онлайн", "Онлайн (Zoom)"):
         lines.append("🌐 Онлайн")
     elif location:
@@ -531,9 +585,11 @@ def make_post(event: Dict) -> str:
     else:
         lines.append("🇰🇿 Казахстан")
 
+    # Площадка
     if venue: 
         lines.append(f"📍 {venue}")
 
+    # Дата и ссылка
     lines.append(f"📅 {date_str}")
     lines.append(f"🔗 <a href='{link}'>Читать →</a>")
 
@@ -574,7 +630,7 @@ class EventBot:
             if not html: return result
             soup = BeautifulSoup(html, "html.parser")
 
-            # Находим главное фото (og:image)
+            # 1. Фото (og:image)
             og_image = soup.find("meta", property="og:image")
             if og_image and og_image.get("content"):
                 img_url = og_image["content"]
@@ -583,31 +639,32 @@ class EventBot:
                     img_url = urljoin(url, img_url)
                 result["image"] = img_url
 
-            # Очистка страницы
+            # Очистка
             for tag in soup(["script", "style", "nav", "footer", "header", "aside", "menu", "form"]):
                 tag.decompose()
 
-            # 🔥 СОБИРАЕМ ТЕКСТ: берем параграфы и элементы списков
-            collected_chunks = []
+            # 🔥 2. СОБИРАЕМ ПОЛНОЕ ОПИСАНИЕ
             content_area = soup.find("main") or soup.find("article") or soup.body
+            collected_chunks = []
             
             if content_area:
+                # Берем параграфы и элементы списков (где обычно лежат призы и условия)
                 for elem in content_area.find_all(['p', 'li']):
                     txt = elem.get_text(separator=" ", strip=True)
-                    # Пропускаем мусорные фразы и слишком короткие строки
-                    if len(txt) > 30 and not any(bad in txt.lower() for bad in ["cookie", "все права", "войти"]):
+                    if len(txt) > 30 and not any(bad in txt.lower() for bad in ["cookie", "войти", "регистрация"]):
                         collected_chunks.append(txt)
-                    # Если набрали 3-4 хороших абзаца, этого хватит для краткого описания
-                    if len(collected_chunks) >= 4:
+                    
+                    # Если набрали 4-5 хороших абзацев — этого хватит для "вкусного" описания
+                    if len(collected_chunks) >= 5:
                         break
             
             full_desc = " ".join(collected_chunks)
             full_desc = re.sub(r"\s{2,}", " ", full_desc)
             
-            # 🔥 УВЕЛИЧЕННЫЙ ЛИМИТ: берем до 80 слов (чтобы влезли и призы, и спикеры)
+            # 🔥 Увеличиваем лимит до 100 слов, чтобы описание было законченным
             words = full_desc.split()
             if words:
-                result["desc"] = " ".join(words[:80]) + "..." if len(words) > 80 else " ".join(words)
+                result["desc"] = " ".join(words[:100]) + "..." if len(words) > 100 else " ".join(words)
                     
         except Exception:
             pass
