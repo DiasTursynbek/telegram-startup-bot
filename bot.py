@@ -606,7 +606,7 @@ class EventBot:
             if not html: return result
             soup = BeautifulSoup(html, "html.parser")
 
-            # Извлекаем главное фото
+            # 1. Извлекаем главное фото (og:image)
             og_image = soup.find("meta", property="og:image")
             if og_image and og_image.get("content"):
                 img_url = og_image["content"]
@@ -615,32 +615,35 @@ class EventBot:
                     img_url = urljoin(url, img_url)
                 result["image"] = img_url
 
-            # Очистка страницы
+            # Очистка от технического мусора
             for tag in soup(["script", "style", "nav", "footer", "header", "aside", "menu", "form"]):
                 tag.decompose()
 
-            # 🔥 СОБИРАЕМ ВЕСЬ ТЕКСТ (включая списки)
-            collected_text = []
-            # Ищем внутри основных контейнеров контента
-            content_area = soup.find("main") or soup.find("article") or soup.body
+            # 🔥 2. СОБИРАЕМ СОДЕРЖАТЕЛЬНОЕ ОПИСАНИЕ
+            # Ищем внутри главных контейнеров
+            content_area = soup.find("main") or soup.find("article") or soup.find("div", class_=re.compile(r"content|post|main", re.I)) or soup.body
             
+            collected_chunks = []
             if content_area:
-                # Берем параграфы, элементы списков и заголовки
+                # Берем все параграфы, элементы списков (для призов) и заголовки
                 for elem in content_area.find_all(['p', 'li', 'h2', 'h3']):
-                    txt = elem.get_text(strip=True)
-                    if len(txt) > 20: # Игнорируем совсем короткие обрывки
-                        collected_text.append(txt)
-            
-            full_desc = " ".join(collected_text)
-            
-            # Чистим от мусора
-            bad_words = ["sedo domain", "website is for sale", "cloudflare", "access denied"]
-            if any(bad in full_desc.lower() for bad in bad_words):
-                return result
+                    txt = elem.get_text(separator=" ", strip=True)
+                    
+                    # Пропускаем технические строки
+                    if any(bad in txt.lower() for bad in ["войти", "регистрация", "cookie", "все права"]):
+                        continue
+                    
+                    if len(txt) > 30:
+                        collected_chunks.append(txt)
+                    
+                    # Если набрали достаточно текста (около 3-4 абзацев), выходим
+                    if len(" ".join(collected_chunks).split()) > 100:
+                        break
 
-            full_desc = re.sub(r"\s{2,}", " ", full_desc)
-            
-            # 🔥 УВЕЛИЧЕННЫЙ ЛИМИТ: берем до 80 слов, чтобы влезли условия и призы
+            full_desc = " ".join(collected_chunks)
+            full_desc = re.sub(r"\s{2,}", " ", full_desc) # Убираем лишние пробелы
+
+            # 🔥 3. ЛИМИТ: Берем до 80 слов (этого хватит, чтобы влезла вся суть)
             words = full_desc.split()
             if words:
                 result["desc"] = " ".join(words[:80]) + "..." if len(words) > 80 else " ".join(words)
