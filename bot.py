@@ -620,6 +620,8 @@ def make_post(event: Dict) -> str:
 
     # Дата 
     final_date_str = f"{event_date} {event_time}".strip()
+    # Удаляем двойные пробелы если времени нет
+    final_date_str = re.sub(r'\s+', ' ', final_date_str)
     lines.append(f"📅 {final_date_str}")
     
     # Ссылка
