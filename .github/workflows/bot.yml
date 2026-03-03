@@ -5,6 +5,9 @@ on:
     - cron: '*/5 * * * *'  # Каждые 5 минут
   workflow_dispatch:       # Ручной запуск
 
+permissions:
+  contents: write
+
 jobs:
   post:
     runs-on: ubuntu-latest

@@ -454,7 +454,9 @@ def remove_dates_and_times(text: str) -> str:
     return text.strip(" -–•.,|")
 
 def clean_title_deterministic(raw_title: str) -> Optional[str]:
-    s = strip_leading_datetime_from_title(raw_title)
+    # Удаляем ссылки из заголовка
+    s = re.sub(r"http\S+", "", raw_title)
+    s = strip_leading_datetime_from_title(s)
     s = remove_weekday_from_start(s)
     s = strip_intro_phrases(s)
     s = fix_glued_words(s)
@@ -594,6 +596,8 @@ def make_post(event: Dict) -> str:
 # 🔥 4. ФИНАЛЬНАЯ ЗАЧИСТКА
     # Сначала расклеиваем (16:00Костанай -> 16:00 Костанай), затем удаляем время!
     title = remove_dates_and_times(fix_glued_words(title))
+    title = re.sub(r"http\S+", "", title).strip()
+    
     description = remove_dates_and_times(fix_glued_words(description))
 
 # 🔥 УБИРАЕМ ГОРОДА И HUB ИЗ ТЕКСТА (НО НЕ ИЗ location)
@@ -859,6 +863,9 @@ class EventBot:
                 title_candidate = None
                 for ln in text.split("\n"):
                     ln = strip_emoji(ln).strip()
+                    # Игнорируем строки, которые начинаются с http
+                    if ln.startswith("http"): continue
+                    
                     if len(ln) > 10:
                         title_candidate = ln
                         break
