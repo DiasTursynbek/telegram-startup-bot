@@ -863,8 +863,13 @@ class EventBot:
                 title_candidate = None
                 for ln in text.split("\n"):
                     ln = strip_emoji(ln).strip()
-                    # Игнорируем строки, которые выглядят как ссылки, пути или UTM метки
-                    if ln.startswith("http") or "utm_" in ln or re.match(r"^\s*[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/\S*)?\s*$", ln): continue
+                    # Игнорируем строки, которые выглядят как ссылки, пути или UTM метки. 
+                    # Иногда Telegram разбивает длинные ссылки на две строки, поэтому проверяем наличие utm_ или типичных окончаний URL.
+                    if (ln.startswith("http") or 
+                        "utm_" in ln or 
+                        re.match(r"^\s*[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/\S*)?\s*$", ln) or
+                        re.match(r"^\s*[\w\-\./]+\?[a-zA-Z0-9_=&-]+\s*$", ln)): 
+                        continue
                     
                     if len(ln) > 10:
                         title_candidate = ln
