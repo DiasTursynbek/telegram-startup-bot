@@ -430,7 +430,7 @@ def strip_leading_datetime_from_title(title: str) -> str:
     t = strip_emoji(title).strip()
     t = normalize_glued_text(t)
     
-    # 🔥 УНИВЕРСАЛЬНО: Сносим любое "одинокое" время в начале заголовка (например, "16:00 Идея может стоить...")
+    # Сносим любое "одинокое" время в начале заголовка (например, "16:00 Идея может стоить...")
     t = re.sub(r"^\s*\d{1,2}:\d{2}\s*", "", t)
     
     # Сносим даты
@@ -607,7 +607,15 @@ def make_post(event: Dict) -> str:
         lines.append(f"📝 {description.strip()}")
 
     # Локация
-    if location in ("Онлайн", "Онлайн (Zoom)"):
+    is_online = location in ("Онлайн", "Онлайн (Zoom)")
+    
+    # Если локация - чужая страна или город не из КЗ и не онлайн - отбрасываем
+    # (Здесь location будет либо пустой (Казахстан), либо один из КЗ городов, 
+    # либо "Онлайн". Если это Ташкент или Бишкек, выкидываем пост на этапе сборки)
+    if location and not is_online and "Узбекистан" in location or "Кыргызстан" in location or "Словения" in location or "Slovenia" in location:
+        return ""
+
+    if is_online:
         lines.append("🌐 Онлайн")
     elif location:
         lines.append(f"🇰🇿 Казахстан, 🏙 {location}")
@@ -739,7 +747,8 @@ class EventBot:
 
             date_raw = dm.group(0)
             rest = line[dm.end():].strip()
-            tm = re.search(r"(?:в\s*)?(\d{1,2}:\d{2})", rest)
+            # Более надежный парсинг времени
+            tm = re.search(r"(?:в\s*|начало\s*в\s*|-?\s*)?(\d{1,2}:\d{2})", rest, re.IGNORECASE)
             time_str = tm.group(1) if tm else None
             if tm: rest = (rest[:tm.start()] + rest[tm.end():]).strip()
 
@@ -859,7 +868,7 @@ class EventBot:
                 title = clean_title_deterministic(raw_title)
                 if not title: continue
 
-                tm2 = re.search(r"\d{1,2}\s+[а-яёА-ЯЁ]{3,}[,\s]+(\d{1,2}:\d{2})", text)
+                tm2 = re.search(r"(?:в\s*|начало\s*в\s*|-?\s*)?(\d{1,2}:\d{2})", text, re.IGNORECASE)
                 time_str = tm2.group(1) if tm2 else None
 
                 all_events.append({
@@ -912,6 +921,11 @@ class EventBot:
                 dt = parse_date(context)
 
                 if not is_future(dt): continue
+                
+                # Достаем время из блока
+                tm3 = re.search(r"(?:в\s*|начало\s*в\s*|-?\s*)?(\d{1,2}:\d{2})", context, re.IGNORECASE)
+                time_str = tm3.group(1) if tm3 else None
+                
                 image_url = None
 
                 if parent:
@@ -939,7 +953,7 @@ class EventBot:
 
                 title_clean = clean_title_deterministic(title_raw) or strip_emoji(dedup_title(title_raw))[:120]
                 events.append({
-                    "title": title_clean, "date": format_date(dt), "location": extract_location(context) or "",
+                    "title": title_clean, "date": format_date(dt, time_str), "location": extract_location(context) or "",
                     "venue": extract_venue(context), "link": href, "full_text": context, "source": site["name"], "image_url": image_url
                 })
                 if len(events) >= 5: break
