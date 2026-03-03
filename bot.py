@@ -1012,6 +1012,10 @@ async def main():
             elif isinstance(details, str) and details:
                 event["deep_description"] = details
 
+            # 🔥 Убираем скриншоты для Google Форм (они всегда выглядят ужасно)
+            if any(domain in norm_link for domain in ["docs.google.com", "forms.gle"]):
+                event["image_url"] = None
+
             text = make_post(event)
             if not text:
                 continue
