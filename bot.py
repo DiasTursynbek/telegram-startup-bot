@@ -619,6 +619,13 @@ def make_post(event: Dict) -> str:
     if location and not is_online and "Узбекистан" in location or "Кыргызстан" in location or "Словения" in location or "Slovenia" in location:
         return ""
 
+    # 🔥 ФИЛЬТР ПО ЯЗЫКУ: Если в тексте нет русского языка (кириллицы), отбрасываем
+    # Считаем количество кириллических символов во всем тексте (заголовок + описание)
+    full_text_for_lang_check = f"{title} {description}"
+    cyrillic_chars = len(re.findall(r'[а-яА-ЯёЁ]', full_text_for_lang_check))
+    if cyrillic_chars < 15: # Если меньше 15 русских букв на весь пост - скорее всего это чистый английский или мусор
+        return ""
+
     if is_online:
         lines.append("🌐 Онлайн")
     elif location:
