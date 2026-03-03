@@ -1,0 +1,29 @@
+name: Telegram Bot
+
+on:
+  schedule:
+    - cron: '0 5 * * *'    # 09:00 Алматы (утро)
+    - cron: '0 14 * * *'   # 18:00 Алматы (вечер)
+  workflow_dispatch:       # Ручной запуск
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5     # Максимум 5 минут
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Run
+      env:
+        BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+      run: |
+        python bot.py
