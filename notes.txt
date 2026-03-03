@@ -1,0 +1,35 @@
+BOT_TOKEN = "8587519643:AAG-cWoQEV96ABp_dTIR5jDZyjbqjuUxewY"
+CHANNEL_ID = "@startup_events_kz"
+
+URLS = [
+    # Новостные порталы
+    {"url": "https://astanahub.com/ru/event/", "name": "Astana Hub"},
+    {"url": "https://er10.kz", "name": "ER10"},
+    {"url": "https://kapital.kz", "name": "Capital"},
+    {"url": "https://forbes.kz", "name": "Forbes kz"},
+    {"url": "https://kz.kursiv.media", "name": "Kursiv kz"},
+    
+    # Венчурные фонды
+    {"url": "https://ma7.vc", "name": "MA7"},
+    {"url": "https://tumarventures.com", "name": "Tumar ventures"},
+    {"url": "https://whitehillcapital.io", "name": "White hill capital"},
+    {"url": "https://bigsky.vc", "name": "Big sky ventures"},
+    {"url": "https://mostfund.vc", "name": "Most ventures"},
+    {"url": "https://axiomcapital.com", "name": "Axiom capital"},
+    {"url": "https://jastarventures.com", "name": "Jas ventures"},
+    
+    # Университеты
+    {"url": "https://nuris.nu.edu.kz", "name": "NURIS"},
+    
+    # Big Tech / Дополнительные
+    {"url": "https://tech.kz", "name": "Big Tech"},
+]
+
+TELEGRAM_CHANNELS = [
+    {"username": "startup_course_com", "name": "Startup Course"},
+    {"username": "digitalbusinesskz", "name": "Digital Business KZ"},
+    {"username": "vcinsightskz", "name": "VC Insights KZ"},
+    {"username": "tech_kz", "name": "Tech KZ"},
+    {"username": "startupalmaty", "name": "Startup Almaty"},
+    {"username": "astanahub_events", "name": "Astana Hub Events"},
+]

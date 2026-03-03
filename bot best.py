@@ -9,7 +9,13 @@ from bs4 import BeautifulSoup
 from telegram import Bot
 import re
 import json
-from pathlib import Path    
+from pathlib import Path
+
+import io
+import numpy as np
+import cv2
+import pytesseract
+from PIL import Image
 
 
 
@@ -29,45 +35,31 @@ def strip_intro_phrases(text: str) -> str:
     patterns = [
         r"^в\s+(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)\s+",
         r"^кажд(ую|ый|ое)?\s+(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)\s+",
-        r"^в\s+\w+\s+",  
+        r"^в\s+\w+\s+",  # в январе, в марте и т.п.
         r"^приглашаем\s+",
         r"^состоится\s+",
         r"^будет\s+",
     ]
+
     s = text.strip()
+
     for p in patterns:
         s = re.sub(p, "", s, flags=re.IGNORECASE)
+
     return s.strip(" -–•,")
 
 def remove_city_from_title(title: str) -> str:
-    # Проходим по всем городам из словаря
-    emoji_pattern = r"[\U00010000-\U0010ffff\u2600-\u27ff\u2300-\u23ff\u25a0-\u25ff\u2B00-\u2BFF]"
     for city_key in KZ_CITIES.keys():
-        # Регулярка ищет город в начале строки или как отдельное слово, игнорируя регистр
-        # (?:{emoji_pattern}|\W)* позволяет найти город сразу после эмодзи в начале
-        title = re.sub(rf"^(?:{emoji_pattern}|\W)*{city_key}\b", "", title, flags=re.IGNORECASE)
-        title = re.sub(rf"\b{city_key}\b", "", title, flags=re.IGNORECASE)
-        
-    # Чистим двойные пробелы и висячие знаки препинания, которые остались после удаления
+        pattern = re.compile(rf"{city_key}", re.IGNORECASE)
+        title = pattern.sub("", title)
+
     title = re.sub(r"\s{2,}", " ", title)
-    title = re.sub(r"^[,\-\s•:!]+", "", title) 
-    return title.strip(" -–•:,!")
+    return title.strip(" -–•,")
 
 def fix_glued_words(text: str) -> str:
-    # 🔥 УНИВЕРСАЛЬНО: Отклеиваем ЛЮБОЕ время от ЛЮБЫХ букв с обеих сторон (16:00Костанай -> 16:00 Костанай)
-    text = re.sub(r'(\d{1,2}:\d{2})([А-Яа-яЁёA-Za-z])', r'\1 \2', text)
-    text = re.sub(r'([А-Яа-яЁёA-Za-z])(\d{1,2}:\d{2})', r'\1 \2', text)
-    
-    # Отклеиваем знаки препинания (100!в -> 100! в)
-    text = re.sub(r'([!?,.])([А-Яа-яЁёA-Za-z])', r'\1 \2', text)
-    
-    # Расклеиваем языки и регистры (вQostanai, Hubпройдет)
-    text = re.sub(r'([а-яёА-ЯЁ])([A-Za-z])', r'\1 \2', text)
-    text = re.sub(r'([A-Za-z])([а-яёА-ЯЁ])', r'\1 \2', text)
+    text = re.sub(r'([а-яё])([A-Z])', r'\1 \2', text)
+    text = re.sub(r'([a-z])([А-ЯЁ])', r'\1 \2', text)
     text = re.sub(r'([а-яё])([А-ЯЁ])', r'\1 \2', text)
-    
-    # Убираем двойные предлоги
-    text = re.sub(r'\b(в|на|во)\s+\1\b', r'\1', text, flags=re.IGNORECASE)
     return text
 
 def extract_city_from_title(title: str) -> Optional[str]:
@@ -79,9 +71,9 @@ def extract_city_from_title(title: str) -> Optional[str]:
 
 def is_clean_photo(url: str) -> bool:
     url = url.lower()
-    # 🔥 ИСПРАВЛЕНО: Убрали "thumbnail" из черного списка, так как Астана Хаб хранит там афиши!
     blacklist = [
-        "icon", "logo", "avatar", "svg", "button", "background", "footer"
+        "banner", "poster", "event", "flyer",
+        "afisha", "1080x", "square", "card",
     ]
     return not any(word in url for word in blacklist)
 
@@ -104,35 +96,49 @@ def generate_universal_description(full_text: str, title: str) -> str:
         text = re.sub(re.escape(title), "", text, flags=re.IGNORECASE)
 
     text = re.sub(r"http\S+", "", text)
-    text = re.sub(r'\bв\s+в\b', 'в', text, flags=re.IGNORECASE)
-    
     paragraphs = [p.strip() for p in text.split("\n") if len(p.strip()) > 50]
 
     for p in paragraphs:
         low = p.lower()
-        if any(w in low for w in ["сохранить", "telegram", "facebook", "whatsapp", "подробнее", "регистрация"]):
+        if any(w in low for w in [
+            "сохранить", "telegram", "facebook",
+            "whatsapp", "подробнее", "регистрация"
+        ]):
             continue
-        if any(x in low for x in ["ул.", "улица", "пр.", "проспект", "этаж", "офис", "конференц", "здание", "район", "останов"]):
+
+        if any(x in low for x in [
+            "ул.", "улица", "пр.", "проспект",
+            "этаж", "офис", "конференц",
+            "здание", "район", "останов"
+        ]):
             continue
+
         if re.search(r"\d{1,2}:\d{2}", p):
             continue
+
         if re.search(r"\d{1,2}\s+[а-яёА-ЯЁ]+", p):
             continue
 
         words = p.split()
-        if len(words) > 12:  
-            if len(words) > 40:
-                return " ".join(words[:40]) + "..."
+        if len(words) > 15:
+            if len(words) > 30:
+                return " ".join(words[:30]) + "..."
             return p
+
     return ""
 
 def generate_fallback_description(title: str) -> str:
     t = title.lower()
-    if "career" in t: return "Профориентационное мероприятие для школьников и студентов о выборе профессии и карьерных возможностях."
-    if "movie" in t: return "Кино-встреча с обсуждением технологий и трендов в IT."
-    if "ai" in t or "искусственный интеллект" in t: return "Мероприятие, посвящённое искусственному интеллекту и его применению в бизнесе и технологиях."
-    if "meetup" in t: return "Неформальная встреча профессионалов для обмена опытом и нетворкинга."
-    if "форум" in t or "conference" in t: return "Профессиональное событие с участием экспертов и обсуждением актуальных отраслевых тем."
+    if "career" in t:
+        return "Профориентационное мероприятие для школьников и студентов о выборе профессии и карьерных возможностях."
+    if "movie" in t:
+        return "Кино-встреча с обсуждением технологий и трендов в IT."
+    if "ai" in t or "искусственный интеллект" in t:
+        return "Мероприятие, посвящённое искусственному интеллекту и его применению в бизнесе и технологиях."
+    if "meetup" in t:
+        return "Неформальная встреча профессионалов для обмена опытом и нетворкинга."
+    if "форум" in t or "conference" in t:
+        return "Профессиональное событие с участием экспертов и обсуждением актуальных отраслевых тем."
     return "Профессиональное мероприятие для специалистов и предпринимателей."
 
 def extract_program_block(full_text: str) -> str:
@@ -161,6 +167,7 @@ def extract_program_block(full_text: str) -> str:
             break
         if len(clean) < 5:
             continue
+
         collected.append(clean)
         if len(collected) >= 4:
             break
@@ -172,10 +179,73 @@ def extract_program_block(full_text: str) -> str:
     words = result.split()
     if len(words) > 40:
         result = " ".join(words[:40]) + "..."
+
     return result.strip()
 
+# OCR
+DATE_REGEX = re.compile(
+    r"\b\d{1,2}[:.]\d{2}\b|"
+    r"\b\d{1,2}\s*(янв|фев|мар|апр|май|июн|июл|авг|сен|окт|ноя|дек)\b|"
+    r"\b\d{4}\b|"
+    r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\b",
+    re.IGNORECASE
+)
+
+async def smart_crop_text_zones(session, image_url: str):
+    try:
+        async with session.get(image_url, timeout=20) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.read()
+
+        pil_img = Image.open(io.BytesIO(data)).convert("RGB")
+        img = np.array(pil_img)
+        h, w, _ = img.shape
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+
+        ocr = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
+
+        crop_top, crop_bottom = 0, h
+        detected_top, detected_bottom = [], []
+
+        for i, text in enumerate(ocr["text"]):
+            text = text.strip()
+            if not text:
+                continue
+
+            if DATE_REGEX.search(text):
+                y = ocr["top"][i]
+                bh = ocr["height"][i]
+                if y < h * 0.45:
+                    detected_top.append(y + bh)
+                if y > h * 0.55:
+                    detected_bottom.append(y)
+
+        if detected_top:
+            crop_top = max(detected_top) + 30
+        if detected_bottom:
+            crop_bottom = min(detected_bottom) - 30
+
+        if crop_bottom - crop_top < h * 0.45:
+            return None
+
+        cropped = img[crop_top:crop_bottom, 0:w]
+        if cropped.size == 0:
+            return None
+
+        final_img = Image.fromarray(cropped)
+        buffer = io.BytesIO()
+        final_img.save(buffer, format="JPEG", quality=95)
+        buffer.seek(0)
+        return buffer
+
+    except Exception as e:
+        print("OCR crop error:", e)
+        return None
+
 def normalize_link(link: str) -> str:
-    if not link: return ""
+    if not link:
+        return ""
     link = link.strip()
     link = link.replace("https://t.me/s/", "https://t.me/")
     link = link.split("?")[0]
@@ -235,90 +305,38 @@ EVENT_WORDS = [
     "bootcamp", "буткемп", "выставка", "конкурс", "competition", "тренинг", "training",
     "мероприятие", "ивент", "event", "приглашает", "приглашаем", "зарегистрируйся", "регистрация"
 ]
-
 NOT_EVENT_WORDS = [
-    # ❌ Новости, сводки, политика
+
     "research", "исследование показало", "инвестировал", "привлек раунд", "млн $", "млрд $",
-    "курс доллара", "биржа", "акции", "токаев", "правительство", "назначен", "уволен", "выручка",
+    "назначен", "уволен", "отчет", "выручка", "курс доллара", "биржа", "акции", "токаев", "правительство приняло",
     
-    # ❌ Госорганы, налоги и бюрократия
+
     "госдоход", "занятости населения", "инспектор", "государственных", "госорган", 
     "акимат", "министерств", "налогов", "бухгалтер", "кадровой служб", "палат предпринимателей", 
-    "атамекен", "госзакуп", "субсиди", "сельского хозяйств", "зко", "вко", "юко", "сқо",
-    "пенсионн", "законопроект", "депутат", "маслихат", "мажилис", "налогообложен", "штраф", 
-    "проверк", "инспекци", "сдача отчет", "информационно-разъяснительная",
-    
-    # ❌ Корпоративная душнота, compliance и регламенты
-    "кдп", "персональным данным", "персональных данных", "регламент", "регулятор", 
-    "комплаенс", "compliance", "требованиям регуляторов", "охрана труда", "техника безопасности",
-    
-    # ❌ Традиционный малый бизнес и бытуха
-    "салон красоты", "маникюр", "повар", "кулинар", "швея", "ремонт", "сантехник",
-    "детский сад", "утренник", "школьная ярмарка",
-    
-    # ❌ Базовое программирование и ML (не для фаундеров)
-    "machine learning", "машинное обучение", "машинному обучению", "машинного обучения",
-    "python", "javascript", "c++", "c#", "php", "golang", "ruby", "swift", "kotlin", "java",
-    "html", "css", "фронтенд", "бэкенд", "frontend", "backend",
-    "старт в программировании", "язык программирования", "языков программирования", 
-    "научиться кодить", "стань разработчиком", "профессия тестировщик", "войти в it",
-    "с нуля до", "обучение программированию", "базовый курс", "для начинающих разработчиков",
-    
-    # 🔥 НОВОЕ: Туториалы по нейросетям (как на скрине)
-    "ai-инструмент", "ai-инструментами", "инструменты ai", "chatgpt", "midjourney", 
-    "цифровой помощник", "создание презентаций", "для образования", "как использовать ai", 
-    "как использовать нейросети", "нейросетей для", "нейросети для", "ai для работы", 
-    "искусственный интеллект как"
+    "атамекен", "госзакуп", "субсиди", "сельского хозяйств", "зко", "вко", "юко", "сқо"
 ]
-
 SITE_STOP_WORDS = [
     "контакты", "о нас", "политика", "войти", "регистрация аккаунта", "подписаться",
     "поиск", "главная", "меню", "все новости", "читать далее", "подробнее", "узнать больше", "privacy", "terms", "cookie"
 ]
-
 DESCRIPTION_SIGNALS = [
     "формат встречи", "выступление спикеров", "вы узнаете", "мы расскажем", "на мероприятии",
     "в рамках", "состоится встреча", "приглашаем вас", "зарегистрируйтесь", "подробнее по ссылке",
-    "свободное общение", "приглашают вас принять участие", "готовы перейти", "поговорим о", "обсудим", "разберем" 
+    "свободное общение", "приглашают вас принять участие", "готовы перейти",
+    "поговорим о", "обсудим", "разберем" 
 ]
 
 KZ_CITIES = {
-    # Мегаполисы
-    "алматы": "Алматы", "almaty": "Алматы",
-    "астана": "Астана", "astana": "Астана", "nur-sultan": "Астана", "nursultan": "Астана", "нур-султан": "Астана", "ақмола": "Астана", "aqmola": "Астана", "целиноград": "Астана", "tselinograd": "Астана",
-    "шымкент": "Шымкент", "shymkent": "Шымкент", "чимкент": "Шымкент", "chimkent": "Шымкент",
-
-    # Областные центры и крупные города
-    "караганда": "Караганда", "karaganda": "Караганда", "қарағанды": "Караганда", "qaraghandy": "Караганда", "qaragandi": "Караганда",
-    "актобе": "Актобе", "aktobe": "Актобе", "ақтөбе": "Актобе", "aqtobe": "Актобе", "актюбинск": "Актобе", "aktyubinsk": "Актобе",
-    "тараз": "Тараз", "taraz": "Тараз", "жамбыл": "Тараз", "zhambyl": "Тараз", "джамбул": "Тараз", "djambul": "Тараз", "jambul": "Тараз",
-    "павлодар": "Павлодар", "pavlodar": "Павлодар",
-    "усть-каменогорск": "Усть-Каменогорск", "ust-kamenogorsk": "Усть-Каменогорск", "өскемен": "Усть-Каменогорск", "oskemen": "Усть-Каменогорск", "ust-kamen": "Усть-Каменогорск",
-    "семей": "Семей", "semey": "Семей", "semei": "Семей", "семипалатинск": "Семей", "semipalatinsk": "Семей",
-    "атырау": "Атырау", "atyrau": "Атырау", "гурьев": "Атырау", "guriev": "Атырау",
-    "костанай": "Костанай", "kostanay": "Костанай", "қостанай": "Костанай", "qostanai": "Костанай", "qostanay": "Костанай", "кустанай": "Костанай", "kustanai": "Костанай", "kustanay": "Костанай",
-    "кызылорда": "Кызылорда", "kyzylorda": "Кызылорда", "қызылорда": "Кызылорда", "qyzylorda": "Кызылорда", "kzyil-orda": "Кызылорда",
-    "уральск": "Уральск", "uralsk": "Уральск", "орал": "Уральск", "oral": "Уральск",
-    "петропавловск": "Петропавловск", "petropavlovsk": "Петропавловск", "петропавл": "Петропавловск", "petropavl": "Петропавловск",
-    "туркестан": "Туркестан", "turkestan": "Туркестан", "түркістан": "Туркестан", "turkistan": "Туркестан",
-    "актау": "Актау", "aktau": "Актау", "ақтау": "Актау", "aqtau": "Актау", "шевченко": "Актау", "shevchenko": "Актау",
-    "темиртау": "Темиртау", "temirtau": "Темиртау",
-    "кокшетау": "Кокшетау", "kokshetau": "Кокшетау", "көкшетау": "Кокшетау", "qokshetau": "Кокшетау", "кокчетав": "Кокшетау", "kokchetav": "Кокшетау",
-    "талдыкорган": "Талдыкорган", "taldykorgan": "Талдыкорган", "талдықорған": "Талдыкорган", "taldyqorgan": "Талдыкорган", "taldikorgan": "Талдыкорган",
-    "экибастуз": "Экибастуз", "ekibastuz": "Экибастуз", "екібастұз": "Экибастуз",
-    "рудный": "Рудный", "rudny": "Рудный", "rudniy": "Рудный", "rudnyi": "Рудный",
-    "жанаозен": "Жанаозен", "zhanaozen": "Жанаозен", "жаңаөзен": "Жанаозен", "janaozen": "Жанаозен", "новый узень": "Жанаозен",
-    "конаев": "Конаев", "konaev": "Конаев", "қонаев": "Конаев", "qonaev": "Конаев", "qonayev": "Конаев", "капчагай": "Конаев", "kapchagay": "Конаев", "қапшағай": "Конаев", "qapshaghay": "Конаев",
-    "жезказган": "Жезказган", "zhezkazgan": "Жезказган", "жезқазған": "Жезказган", "jezqazgan": "Жезказган", "джезказган": "Жезказган", "dzhezkazgan": "Жезказган",
-    "балхаш": "Балхаш", "balkhash": "Балхаш", "балқаш": "Балхаш", "balqash": "Балхаш",
-    "сатпаев": "Сатпаев", "satpayev": "Сатпаев", "сәтбаев": "Сатпаев", "satbayev": "Сатпаев",
-    "каскелен": "Каскелен", "kaskelen": "Каскелен", "қаскелең": "Каскелен", "qaskelen": "Каскелен",
-    "кульсары": "Кульсары", "kulsary": "Кульсары", "құлсары": "Кульсары", "qulsary": "Кульсары",
-
-
-    "онлайн": "Онлайн", "online": "Онлайн", "zoom": "Онлайн (Zoom)", "онлайн (zoom)": "Онлайн (Zoom)",
-    "ташкент": "Ташкент, Узбекистан", "tashkent": "Ташкент, Узбекистан",
-    "бишкек": "Бишкек, Кыргызстан", "bishkek": "Бишкек, Кыргызстан",
+    "алматы": "Алматы", "almaty": "Алматы", "астана": "Астана", "astana": "Астана", "nur-sultan": "Астана",
+    "nursultan": "Астана", "нур-султан": "Астана", "шымкент": "Шымкент", "shymkent": "Шымкент",
+    "усть-каменогорск": "Усть-Каменогорск", "ust-kamenogorsk": "Усть-Каменогорск", "oskemen": "Усть-Каменогорск",
+    "кызылорда": "Кызылорда", "kyzylorda": "Кызылорда", "актобе": "Актобе", "aktobe": "Актобе",
+    "тараз": "Тараз", "taraz": "Тараз", "павлодар": "Павлодар", "pavlodar": "Павлодар",
+    "петропавловск": "Петропавловск", "petropavlovsk": "Петропавловск", "семей": "Семей", "semey": "Семей",
+    "атырау": "Атырау", "atyrau": "Атырау", "жезказган": "Жезқазған", "жезқазған": "Жезқазған",
+    "zhezkazgan": "Жезқазған", "jezqazgan": "Жезқазған", "актау": "Актау", "aktau": "Актау",
+    "конаев": "Конаев", "qonaev": "Конаев", "konaev": "Конаев", "qonayev": "Конаев", # 🔥 Добавили Конаев
+    "онлайн": "Онлайн", "online": "Онлайн", "zoom": "Онлайн (Zoom)", "ташкент": "Ташкент, Узбекистан", "tashkent": "Ташкент, Узбекистан",
 }
 
 WEEK_DAYS = {
@@ -333,6 +351,7 @@ WEEK_DAYS = {
 
 EMOJI_RE = re.compile("[\U00010000-\U0010ffff\u2600-\u27ff\u2300-\u23ff\u25a0-\u25ff\u2B00-\u2BFF]", re.UNICODE)
 
+# Helpers
 def strip_emoji(s: str) -> str:
     return EMOJI_RE.sub("", s).strip()
 
@@ -378,12 +397,8 @@ def parse_date(text: str) -> Optional[datetime]:
 
 def format_date(dt: datetime, time_str: str = None) -> str:
     months = {1:"января", 2:"февраля", 3:"марта", 4:"апреля", 5:"мая", 6:"июня", 7:"июля", 8:"августа", 9:"сентября", 10:"октября", 11:"ноября", 12:"декабря"}
-    
-    # 🔥 УНИВЕРСАЛЬНО: Собираем формат "Год День Месяц"
-    s = f"{dt.year} {dt.day} {months[dt.month]}"
-    
-    # Если парсер нашел время, приклеиваем его в конец через пробел
-    return f"{s} {time_str}" if time_str else s
+    s = f"{dt.day} {months[dt.month]} {dt.year}"
+    return f"{s}, {time_str}" if time_str else s
 
 def extract_location(text: str) -> Optional[str]:
     t = text.lower()
@@ -429,29 +444,36 @@ def normalize_glued_text(s: str) -> str:
 def strip_leading_datetime_from_title(title: str) -> str:
     t = strip_emoji(title).strip()
     t = normalize_glued_text(t)
-    
-    # 🔥 УНИВЕРСАЛЬНО: Сносим любое "одинокое" время в начале заголовка (например, "16:00 Идея может стоить...")
-    t = re.sub(r"^\s*\d{1,2}:\d{2}\s*", "", t)
-    
-    # Сносим даты
     t = re.sub(r"^\s*\d{1,2}\s+[А-Яа-яЁёA-Za-z]{3,}[,]?\s+\d{1,2}:\d{2}\s*", "", t, flags=re.IGNORECASE)
     t = re.sub(r"^\s*\d{1,2}\s+[а-яё]{3,}(?:\s+\d{4})?\s*", "", t, flags=re.IGNORECASE)
     t = re.sub(r"^\s*\d{1,2}\.\d{2}(?:\.\d{4})?\s*", "", t)
-    
     return t.strip(" -–•.,").strip()
 
 def remove_dates_and_times(text: str) -> str:
     if not text:
         return ""
+
+    # 1. Время (например: 19:00, 19:00-21:00, 7 PM)
     text = re.sub(r'\b\d{1,2}:\d{2}(?:-\d{1,2}:\d{2})?(?:\s*[aApP][mM])?\b', '', text)
+    
+    # 🔥 2. ИСПРАВЛЕНО: Даты на русском (теперь ловит и "28 февраля", и "27-го февраля", и "1-е мая")
     text = re.sub(r'\b\d{1,2}(?:-[а-я]{1,2})?\s+(?:янв[а-я]*|фев[а-я]*|мар[а-я]*|апр[а-я]*|мая|май|июн[а-я]*|июл[а-я]*|авг[а-я]*|сен[а-я]*|окт[а-я]*|ноя[а-я]*|дек[а-я]*)\s*(?:,?\s*\d{4}(?:\s*г\.?)?)?\b', '', text, flags=re.IGNORECASE)
+    
+    # 3. Даты на английском (например: Feb 28, 2026 или 28 February)
     text = re.sub(r'\b(?:jan[a-z]*|feb[a-z]*|mar[a-z]*|apr[a-z]*|may|jun[a-z]*|jul[a-z]*|aug[a-z]*|sep[a-z]*|oct[a-z]*|nov[a-z]*|dec[a-z]*)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*\d{4})?\b', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\b\d{1,2}\s+(?:jan[a-z]*|feb[a-z]*|mar[a-z]*|apr[a-z]*|may|jun[a-z]*|jul[a-z]*|aug[a-z]*|sep[a-z]*|oct[a-z]*|nov[a-z]*|dec[a-z]*)\s*(?:,?\s*\d{4})?\b', '', text, flags=re.IGNORECASE)
+    
+    # 4. Числовые даты (например: 28.02.2026, 28/02)
     text = re.sub(r'\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b', '', text)
+    
+    # 5. Чистим мусор, который остался после удаления (запятые перед пайпами, двойные пробелы)
     text = re.sub(r',\s*\|', ' |', text) 
     text = re.sub(r'\|\s*\|', '|', text)
     text = re.sub(r'\s{2,}', ' ', text)
+    
     return text.strip(" -–•.,|")
+
+
 
 def clean_title_deterministic(raw_title: str) -> Optional[str]:
     s = strip_leading_datetime_from_title(raw_title)
@@ -468,9 +490,9 @@ def clean_title_deterministic(raw_title: str) -> Optional[str]:
             s = s[:idx].strip(" -–•.,")
             break
 
-    # Убираем повисшие предлоги в конце и двойные предлоги ("в в Hub")
-    s = re.sub(r'\bв\s+в\b', 'в', s, flags=re.IGNORECASE)
+
     s = re.sub(r'\s+(в|на|с|и|для|от|за|к|по|из|у|о|об|at|in|on|for|and|to|the)\s*$', '', s, flags=re.IGNORECASE)
+
     s = re.sub(r"\s{2,}", " ", s).strip(" -–•.,")
     
     if len(s) < 5 or looks_like_description(s): return None
@@ -509,24 +531,7 @@ def parse_glued_line(line: str) -> Optional[Dict]:
     return {"dt": dt, "time_str": time_str, "city": city, "title_raw": title_raw[:300], "date_formatted": format_date(dt, time_str)}
 
 
-def remove_city_and_hub_from_text(text: str) -> str:
-    if not text:
-        return ""
 
-    # Удаляем конструкции типа "в Qostanai Hub"
-    text = re.sub(r'\bв\s+[A-Za-zА-Яа-яЁё-]+\s+Hub\b', '', text, flags=re.IGNORECASE)
-
-    # Удаляем все города из словаря KZ_CITIES
-    for city_key in KZ_CITIES.keys():
-        text = re.sub(rf'\b{city_key}\b', '', text, flags=re.IGNORECASE)
-
-    # Чистим двойные пробелы
-    text = re.sub(r'\s{2,}', ' ', text)
-
-    # Убираем пробел перед точкой
-    text = re.sub(r'\s+\.', '.', text)
-
-    return text.strip()
 # ─── Formatting post ───────────────────────────────────────
 def make_post(event: Dict) -> str:
     title = (event.get("title") or "").strip()
@@ -538,75 +543,44 @@ def make_post(event: Dict) -> str:
 
     location = event.get("location", "")
     venue = event.get("venue", "")
-    
-    # 🔥 1. Принудительная очистка заголовка от города и лишних дат в начале
-    title = remove_city_from_title(title)
     title = strip_leading_datetime_from_title(title)
 
-    # Достаем сырой текст и текст с сайта
-    full_text_raw = event.get("full_text", "")
     deep_description = event.get("deep_description", "")
+    program_block = extract_program_block(event.get("full_text", ""))
 
-    # 🔥 2. УМНЫЙ ВЫБОР ДАТЫ (ищем финал, а не дедлайн)
-    context = (full_text_raw + " " + deep_description).lower()
-    # Ищем фразы "финал", "питчинг", "дата проведения" и саму дату рядом
-    match = re.search(r"(?:финал|питчинг|дата проведения|состоится)\s*[-—]?\s*(\d{1,2}\s+(?:янв|фев|мар|апр|май|июн|июл|авг|сен|окт|ноя|дек)[а-я]*)", context)
-    
-    if match:
-        parsed_final = parse_date(match.group(1))
-        if parsed_final:
-            # Сохраняем время из оригинальной даты, если оно было
-            tm_match = re.search(r"\d{1,2}:\d{2}", date_str)
-            time_str = tm_match.group(0) if tm_match else None
-            date_str = format_date(parsed_final, time_str)
-
-    # Извлекаем дату и время в явные переменные ДО удаления из текста
-    event_time_match = re.search(r"\d{1,2}:\d{2}", date_str)
-    event_time = event_time_match.group(0) if event_time_match else ""
-    event_date = date_str.replace(event_time, "").strip() if event_time else date_str
-
-    # 🔥 3. ПРИОРИТЕТ ОПИСАНИЯ
-    # Берем длинное описание с сайта, если оно есть
-    if deep_description and len(deep_description) > 50:
+    if deep_description:
         description = deep_description
+    elif program_block:
+        description = program_block
     else:
-        # Иначе ищем программу или берем универсальное
-        program_block = extract_program_block(full_text_raw)
-        if program_block and len(program_block) > 40:
-            description = program_block
-        else:
-            description = generate_universal_description(full_text_raw, title)
+        description = generate_universal_description(event.get("full_text", ""), title)
 
-    # Заглушка, если текста вообще нет
     if not description:
         description = generate_fallback_description(title)
 
-    # Убираем дублирование, если описание прилипло к заголовку
     if description:
         desc_clean = strip_emoji(description).strip()
         desc_prefix = desc_clean[:25]
+        
         if len(desc_prefix) > 15:
             idx = title.lower().find(desc_prefix.lower())
             if idx > 3:
                 title = title[:idx].strip(" -–•.,:;|")
                 title = re.sub(r'\s+(в|на|с|и|для|от|за|к|по|из|у|о|об|at|in|on|for|and|to|the)\s*$', '', title, flags=re.IGNORECASE)
+                title = title.strip()
 
-# 🔥 4. ФИНАЛЬНАЯ ЗАЧИСТКА
-    # Сначала расклеиваем (16:00Костанай -> 16:00 Костанай), затем удаляем время!
-    title = remove_dates_and_times(fix_glued_words(title))
-    description = remove_dates_and_times(fix_glued_words(description))
+    # 🔥 НОВОЕ: Тотальная зачистка от дат и времени перед публикацией
+    title = remove_dates_and_times(title)
+    if description:
+        description = remove_dates_and_times(description)
 
-# 🔥 УБИРАЕМ ГОРОДА И HUB ИЗ ТЕКСТА (НО НЕ ИЗ location)
-    title = remove_city_and_hub_from_text(title)
-    description = remove_city_and_hub_from_text(description)
-
-    # 🔥 5. СБОРКА ПОСТА ПО ШАБЛОНУ
-    lines = [f"🎯 <b>{title.strip()}</b>"]
+    # 3️⃣ Собираем финальный текст
+    lines = [f"🎯 <b>{title}</b>"]
 
     if description:
-        lines.append(f"📝 {description.strip()}")
+        lines.append("")
+        lines.append(f"📝 {description}")
 
-    # Локация
     if location in ("Онлайн", "Онлайн (Zoom)"):
         lines.append("🌐 Онлайн")
     elif location:
@@ -614,21 +588,16 @@ def make_post(event: Dict) -> str:
     else:
         lines.append("🇰🇿 Казахстан")
 
-    # Площадка
     if venue: 
         lines.append(f"📍 {venue}")
 
-    # Дата 
-    final_date_str = f"{event_date} {event_time}".strip()
-    lines.append(f"📅 {final_date_str}")
-    
-    # Ссылка
+    lines.append(f"📅 {date_str}")
     lines.append(f"🔗 <a href='{link}'>Читать →</a>")
 
     return "\n".join(lines)
 
 
-
+# ─── Bot ─────────────────────────────────────────────────────────────────────
 
 class EventBot:
     def __init__(self):
@@ -637,6 +606,7 @@ class EventBot:
 
     async def get_session(self) -> aiohttp.ClientSession:
         if not self.session:
+            # Обновим User-Agent, чтобы сайты реже блокировали запросы
             self.session = aiohttp.ClientSession(
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"}
             )
@@ -654,68 +624,57 @@ class EventBot:
             logger.error(f"fetch {url}: {e}")
             return ""
 
-    async def fetch_event_details(self, url: str) -> Dict[str, str]:
-        result = {"desc": "", "image": ""}
+    # 🔥 НОВАЯ ФУНКЦИЯ ДЛЯ ГЛУБОКОГО ПАРСИНГА САЙТОВ
+    async def fetch_event_details(self, url: str) -> str:
         if not url or not url.startswith("http") or "t.me" in url:
-            return result
+            return ""
 
         try:
             html = await self.fetch(url)
-            if not html: return result
+            if not html: return ""
             soup = BeautifulSoup(html, "html.parser")
 
-            # 1. Фото (og:image)
-            og_image = soup.find("meta", property="og:image")
-            if og_image and og_image.get("content"):
-                img_url = og_image["content"]
-                if not img_url.startswith("http"):
-                    from urllib.parse import urljoin
-                    img_url = urljoin(url, img_url)
-                result["image"] = img_url
-
-            # Очистка
             for tag in soup(["script", "style", "nav", "footer", "header", "aside", "menu", "form"]):
                 tag.decompose()
 
-            # 🔥 2. СОБИРАЕМ ПОЛНОЕ ОПИСАНИЕ
-            content_area = soup.find("main") or soup.find("article") or soup.body
-            collected_chunks = []
-            
-            if content_area:
-                # Берем параграфы и элементы списков (где обычно лежат призы и условия)
-                for elem in content_area.find_all(['p', 'li']):
-                    txt = elem.get_text(separator=" ", strip=True)
-                    if len(txt) > 30 and not any(bad in txt.lower() for bad in ["cookie", "войти", "регистрация"]):
-                        if elem.name == 'li':
-                            collected_chunks.append("• " + txt)
-                        else:
-                            collected_chunks.append(txt)
+            # Фразы с твоих скриншотов
+            bad_words = [
+                "sedo domain", "domain parking", "webpage was generated", 
+                "website is for sale", "source for information", "maintained by the domain owner",
+                "disclaimer", "cloudflare", "access denied", "not found"
+            ]
+
+            paragraphs = soup.find_all("p")
+            for p in paragraphs:
+                text = p.get_text(separator=" ", strip=True)
+                if len(text) > 60:
+                    low = text.lower()
+                    # Если нашли хоть одно совпадение со шлаком - возвращаем пустоту
+                    if any(bad in low for bad in bad_words):
+                        logger.warning(f"⚠️ Обнаружен мусорный текст на {url}, пропускаем.")
+                        return ""
                     
-                    # Если набрали 4-5 хороших абзацев — этого хватит для "вкусного" описания
-                    if len(collected_chunks) >= 5:
-                        break
-            
-            # 🔥 Формируем красивое описание с переносами строк и лимитом в 100 слов
-            word_count = 0
-            final_chunks = []
-            for chunk in collected_chunks:
-                chunk_words = chunk.split()
-                if word_count + len(chunk_words) > 100:
-                    needed = 100 - word_count
-                    if needed > 0:
-                        final_chunks.append(" ".join(chunk_words[:needed]) + "...")
-                    break
-                else:
-                    final_chunks.append(chunk)
-                    word_count += len(chunk_words)
-                    
-            if final_chunks:
-                result["desc"] = "\n".join(final_chunks)
+                    # Если текст на английском, а ивент в Казахстане (простая проверка на латиницу)
+                    # Это поможет отсечь англоязычный спам на припаркованных доменах
+                    latin_only = re.fullmatch(r'[A-Za-z0-9\s\.,!\?\-\(\)]+', text)
+                    if latin_only and len(text) > 100:
+                        return ""
+
+                    text = re.sub(r"\s{2,}", " ", text)
+                    words = text.split()
+                    return " ".join(words[:40]) + "..." if len(words) > 40 else text
+
+            # Проверка мета-тега description
+            meta_desc = soup.find("meta", attrs={"name": "description"})
+            if meta_desc and meta_desc.get("content"):
+                desc = meta_desc["content"].strip()
+                if not any(bad in desc.lower() for bad in bad_words):
+                    return desc
                     
         except Exception:
             pass
             
-        return result
+        return ""
 
     def parse_digest(self, text: str, post_link: str, source: str, image_url: str) -> List[Dict]:
         events = []
@@ -940,6 +899,7 @@ class EventBot:
             except Exception:
                 continue
         return events
+
 # ─── main ────────────────────────────────────────────────────────────────────
 async def main():
     logger.info("🚀 Старт...")
@@ -953,6 +913,7 @@ async def main():
     try:
         events = await bot_obj.get_all_events()
 
+        # Убираем дубли по заголовку
         unique, seen = [], set()
         for e in events:
             key = (e.get("title", "")[:60]).lower()
@@ -968,57 +929,38 @@ async def main():
         for event in unique[:15]:
             norm_link = normalize_link(event.get("link", ""))
 
+            # ───── Проверка дубля ─────
             if norm_link in bot_obj.posted:
                 logger.info(f"⏭️ Уже публиковалось: {event.get('title')[:50]}")
                 continue
 
-            # 🔥 1. Получаем описание и качественное фото
-            details = await bot_obj.fetch_event_details(norm_link)
-            
-            # На случай, если details это словарь (с новым кодом)
-            if isinstance(details, dict):
-                if details.get("desc"):
-                    event["deep_description"] = details["desc"]
-                if details.get("image"):
-                    event["image_url"] = details["image"]
-            # На случай, если details это просто строка (со старым кодом)
-            elif isinstance(details, str) and details:
-                event["deep_description"] = details
+            # 🔥 ───── ГЛУБОКИЙ ПАРСИНГ: Идем на сайт за описанием ───── 🔥
+            deep_desc = await bot_obj.fetch_event_details(norm_link)
+            if deep_desc:
+                event["deep_description"] = deep_desc
+                logger.info(f"Успешно спарсили живое описание по ссылке: {norm_link}")
 
+            # Формируем пост с учетом добытого текста
             text = make_post(event)
             if not text:
                 continue
 
             try:
-                photo_url = event.get("image_url")
-                
-                if photo_url:
-                    # 🔥 2. НАДЕЖНАЯ ОТПРАВКА: Скачиваем фото в буфер, чтобы Телеграм не капризничал
-                    try:
-                        session = await bot_obj.get_session()
-                        async with session.get(photo_url, timeout=15) as resp:
-                            if resp.status == 200:
-                                photo_bytes = await resp.read()
-                                await bot_api.send_photo(
-                                    chat_id=CHANNEL_ID,
-                                    message_thread_id=MESSAGE_THREAD_ID,
-                                    photo=photo_bytes,
-                                    caption=text,
-                                    parse_mode="HTML",
-                                )
-                            else:
-                                raise Exception("Bad HTTP status for image")
-                    except Exception as img_e:
-                        logger.warning(f"Не удалось скачать фото, отправляем текст. Ошибка: {img_e}")
-                        await bot_api.send_message(
-                            chat_id=CHANNEL_ID,
-                            message_thread_id=MESSAGE_THREAD_ID,
-                            text=text,
-                            parse_mode="HTML",
-                            disable_web_page_preview=True,
-                        )
+                photo_to_send = None
+
+                if event.get("image_url"):
+                    session = await bot_obj.get_session()
+                    photo_to_send = await smart_crop_text_zones(session, event["image_url"])
+
+                if photo_to_send:
+                    await bot_api.send_photo(
+                        chat_id=CHANNEL_ID,
+                        message_thread_id=MESSAGE_THREAD_ID,
+                        photo=photo_to_send,
+                        caption=text,
+                        parse_mode="HTML",
+                    )
                 else:
-                    # Если фото вообще не найдено
                     await bot_api.send_message(
                         chat_id=CHANNEL_ID,
                         message_thread_id=MESSAGE_THREAD_ID,
@@ -1042,6 +984,7 @@ async def main():
 
     finally:
         await bot_obj.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
