@@ -1025,43 +1025,30 @@ async def main():
             if not text:
                 continue
 
+            photo_url = event.get("image_url")
+            # Если нет фото (например Google Forms или статья без обложки), то мы просто пропускаем
+            if not photo_url:
+                logger.info(f"🚫 Пропускаем ивент (нет обложки): {event.get('title')[:50]}")
+                continue
+
             try:
-                photo_url = event.get("image_url")
-                
-                if photo_url:
-                    # 🔥 2. НАДЕЖНАЯ ОТПРАВКА: Скачиваем фото в буфер, чтобы Телеграм не капризничал
-                    try:
-                        session = await bot_obj.get_session()
-                        async with session.get(photo_url, timeout=15) as resp:
-                            if resp.status == 200:
-                                photo_bytes = await resp.read()
-                                await bot_api.send_photo(
-                                    chat_id=CHANNEL_ID,
-                                    message_thread_id=MESSAGE_THREAD_ID,
-                                    photo=photo_bytes,
-                                    caption=text,
-                                    parse_mode="HTML",
-                                )
-                            else:
-                                raise Exception("Bad HTTP status for image")
-                    except Exception as img_e:
-                        logger.warning(f"Не удалось скачать фото, отправляем текст. Ошибка: {img_e}")
-                        await bot_api.send_message(
+                # 🔥 2. НАДЕЖНАЯ ОТПРАВКА: Скачиваем фото в буфер
+                session = await bot_obj.get_session()
+                async with session.get(photo_url, timeout=15) as resp:
+                    if resp.status == 200:
+                        photo_bytes = await resp.read()
+                        await bot_api.send_photo(
                             chat_id=CHANNEL_ID,
                             message_thread_id=MESSAGE_THREAD_ID,
-                            text=text,
+                            photo=photo_bytes,
+                            caption=text,
                             parse_mode="HTML",
-                            disable_web_page_preview=True,
                         )
-                else:
-                    # Если фото вообще не найдено
-                    await bot_api.send_message(
-                        chat_id=CHANNEL_ID,
-                        message_thread_id=MESSAGE_THREAD_ID,
-                        text=text,
-                        parse_mode="HTML",
-                        disable_web_page_preview=True,
-                    )
+                    else:
+                        raise Exception("Bad HTTP status for image")
+            except Exception as img_e:
+                logger.warning(f"🚫 Не удалось скачать фото, пропускаем ивент. Ошибка: {img_e}")
+                continue
 
                 bot_obj.posted.add(norm_link)
                 save_posted(bot_obj.posted)
