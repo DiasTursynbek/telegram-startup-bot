@@ -454,8 +454,8 @@ def remove_dates_and_times(text: str) -> str:
     return text.strip(" -–•.,|")
 
 def clean_title_deterministic(raw_title: str) -> Optional[str]:
-    # Удаляем ссылки из заголовка
-    s = re.sub(r"http\S+", "", raw_title)
+    # Удаляем любые ссылки (с протоколом или без, голые домены и пути с utm)
+    s = re.sub(r"https?://\S+|www\.\S+|\b[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/\S*)?\b", "", raw_title)
     s = strip_leading_datetime_from_title(s)
     s = remove_weekday_from_start(s)
     s = strip_intro_phrases(s)
@@ -596,7 +596,7 @@ def make_post(event: Dict) -> str:
 # 🔥 4. ФИНАЛЬНАЯ ЗАЧИСТКА
     # Сначала расклеиваем (16:00Костанай -> 16:00 Костанай), затем удаляем время!
     title = remove_dates_and_times(fix_glued_words(title))
-    title = re.sub(r"http\S+", "", title).strip()
+    title = re.sub(r"https?://\S+|www\.\S+|\b[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/\S*)?\b", "", title).strip()
     
     description = remove_dates_and_times(fix_glued_words(description))
 
@@ -863,8 +863,8 @@ class EventBot:
                 title_candidate = None
                 for ln in text.split("\n"):
                     ln = strip_emoji(ln).strip()
-                    # Игнорируем строки, которые начинаются с http
-                    if ln.startswith("http"): continue
+                    # Игнорируем строки, которые выглядят как ссылки, пути или UTM метки
+                    if ln.startswith("http") or "utm_" in ln or re.match(r"^\s*[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/\S*)?\s*$", ln): continue
                     
                     if len(ln) > 10:
                         title_candidate = ln
