@@ -34,5 +34,6 @@ jobs:
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git pull --rebase origin main || true
         git add state/load_posted.json
-        git diff --quiet && git diff --staged --quiet || (git commit -m "Update posted events list" && git push)
+        git diff --quiet && git diff --staged --quiet || (git commit -m "Update posted events list" && git pull --rebase origin main && git push origin main)

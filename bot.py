@@ -620,6 +620,11 @@ def make_post(event: Dict) -> str:
         return ""
 
     # 🔥 ФИЛЬТР ПО ЯЗЫКУ: Если в тексте нет русского языка (кириллицы), отбрасываем
+    # Проверяем сам заголовок на наличие русского текста
+    cyrillic_in_title = len(re.findall(r'[а-яА-ЯёЁ]', title))
+    if cyrillic_in_title < 2:  # Если в заголовке нет хотя бы 2 русских букв, скорее всего он на английском
+        return ""
+
     # Считаем количество кириллических символов во всем тексте (заголовок + описание)
     full_text_for_lang_check = f"{title} {description}"
     cyrillic_chars = len(re.findall(r'[а-яА-ЯёЁ]', full_text_for_lang_check))
