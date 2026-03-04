@@ -1062,16 +1062,13 @@ async def main():
                 logger.warning(f"🚫 Не удалось скачать фото, пропускаем ивент. Ошибка: {img_e}")
                 continue
 
-                bot_obj.posted.add(norm_link)
-                save_posted(bot_obj.posted)
+            bot_obj.posted.add(norm_link)
+            save_posted(bot_obj.posted)
 
-                posted += 1
-                logger.info(f"✅ ({posted}) {event.get('title','')[:50]}")
+            posted += 1
+            logger.info(f"✅ ({posted}) {event.get('title','')[:50]}")
 
-                await asyncio.sleep(2)
-
-            except Exception as e:
-                logger.error(f"❌ Ошибка отправки: {e}")
+            await asyncio.sleep(2)
 
         logger.info(f"✅ Готово! Опубликовано новых: {posted}")
 
