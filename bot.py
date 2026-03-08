@@ -264,11 +264,22 @@ NOT_EVENT_WORDS = [
     "научиться кодить", "стань разработчиком", "профессия тестировщик", "войти в it",
     "с нуля до", "обучение программированию", "базовый курс", "для начинающих разработчиков",
     
-    # 🔥 НОВОЕ: Туториалы по нейросетям (как на скрине)
+    # 🔥 Туториалы по нейросетям
     "ai-инструмент", "ai-инструментами", "инструменты ai", "chatgpt", "midjourney", 
     "цифровой помощник", "создание презентаций", "для образования", "как использовать ai", 
     "как использовать нейросети", "нейросетей для", "нейросети для", "ai для работы", 
-    "искусственный интеллект как"
+    "искусственный интеллект как",
+
+    # ❌ КУРСЫ, ОБУЧЕНИЕ, ШКОЛЫ (не стартап-ивенты!)
+    "курс", "курсы", "онлайн-курс", "онлайн курс", "бесплатный курс", "платный курс",
+    "обучение", "обучающий", "обучающая программа", "образовательный курс", "образовательная программа",
+    "урок", "уроки", "занятие", "занятия", "лекция", "лекции", "модуль обучения",
+    "школа", "онлайн-школа", "летняя школа", "зимняя школа",
+    "интенсив", "марафон", "марафон обучения", "учебный", "учебная",
+    "сертификат", "сертификация", "диплом", "аттестация",
+    "преподаватель", "репетитор", "наставник", "tutor", "course", "courses", "lesson",
+    "обучись", "научись", "выучи", "освой профессию", "получи профессию",
+    "стажировка", "практика для студентов", "студенческая программа",
 ]
 
 SITE_STOP_WORDS = [
@@ -401,9 +412,42 @@ def extract_venue(text: str) -> Optional[str]:
     if at: return at.group(1).strip()[:60]
     return None
 
+# 🔥 СТАРТАП-ФИЛЬТР: Ивент должен быть про стартап-экосистему
+STARTUP_WORDS = [
+    # Стартап-специфичные слова
+    "стартап", "startup", "start-up", "старт-ап", "стартапов", "стартапы", "стартапер",
+    "фаундер", "founder", "co-founder", "сооснователь", "основатель",
+    "питч", "pitch", "питчинг", "pitching", "demo day", "демо день", "демо-день",
+    "инвестор", "investor", "инвестиции", "investment", "венчур", "venture", "vc", "фонд",
+    "раунд", "seed", "pre-seed", "series a", "series b", "angel", "ангел",
+    "акселератор", "accelerator", "акселерация", "инкубатор", "incubator",
+    "предприниматель", "предпринимательств", "entrepreneur", "entrepreneurship",
+    "бизнес-модель", "business model", "mvp", "product-market fit", "pmf",
+    "масштабирование", "scaling", "scale-up", "скейлинг",
+    "трекшн", "traction", "метрики роста", "growth",
+    "менторство", "mentorship", "ментор", "mentor",
+    "нетворкинг", "networking", "коммьюнити", "community",
+    "tech hub", "технопарк", "technopark", "hub",
+    "astana hub", "аstana hub", "most hub", "it park",
+    "хакатон", "hackathon",
+    "fintech", "финтех", "edtech", "эдтех", "healthtech", "хелстех",
+    "deeptech", "диптех", "agritech", "агритех", "proptech", "проптех",
+    "saas", "b2b", "b2c", "d2c",
+    "батл стартапов", "cup стартапов", "стартап-уикенд", "startup weekend",
+    "грант", "grant", "грантов",
+]
+
+def is_startup_related(text: str) -> bool:
+    """Проверяет, относится ли текст к стартап-экосистеме."""
+    t = text.lower()
+    return any(w in t for w in STARTUP_WORDS)
+
 def is_real_event(text: str) -> bool:
     t = text.lower()
-    return any(w in t for w in EVENT_WORDS) and not any(w in t for w in NOT_EVENT_WORDS)
+    has_event_words = any(w in t for w in EVENT_WORDS)
+    has_not_event_words = any(w in t for w in NOT_EVENT_WORDS)
+    has_startup_relevance = is_startup_related(t)
+    return has_event_words and not has_not_event_words and has_startup_relevance
 
 def is_site_trash(title: str) -> bool:
     return any(s in title.lower() for s in SITE_STOP_WORDS)
@@ -629,6 +673,56 @@ def make_post(event: Dict) -> str:
     full_text_for_lang_check = f"{title} {description}"
     cyrillic_chars = len(re.findall(r'[а-яА-ЯёЁ]', full_text_for_lang_check))
     if cyrillic_chars < 15: # Если меньше 15 русских букв на весь пост - скорее всего это чистый английский или мусор
+        return ""
+
+    # 🔥 ФИЛЬТР ПО ТЕМАТИКЕ: Только ивенты про стартапы и предпринимательство
+    # Проверяем заголовок + описание + полный текст на наличие ключевых слов
+    topic_check_text = f"{title} {description} {full_text_raw}".lower()
+    STARTUP_KEYWORDS = [
+        "стартап", "startup", "стартапер", "стартапов", "стартапы",
+        "предприниматель", "предпринимательств", "бизнес", "business",
+        "фаундер", "founder", "co-founder", "кофаундер",
+        "инвестор", "инвестиц", "invest", "венчур", "venture",
+        "акселератор", "accelerat", "инкубатор", "incubat",
+        "питч", "pitch", "demo day", "демо-день",
+        "mvp", "product-market", "продукт", "масштабир",
+        "финтех", "fintech", "edtech", "healthtech", "proptech",
+        "ai стартап", "it стартап", "tech стартап",
+        "грант", "grant", "фонд", "fund",
+        "трекер", "ментор", "mentor", "коуч",
+        "экосистем", "ecosystem",
+        "предприниматель", "entrepreneurship", "entrepreneur",
+        "b2b", "b2c", "saas", "scale", "скейл",
+        "привлечени", "раунд", "seed", "pre-seed",
+        "батл", "battle", "челлендж", "challenge",
+        "хакатон", "hackathon",  # хакатоны для стартапов ок
+        "нетворкинг", "networking", "meetup", "митап",
+        "цифров", "digital", "иннова", "innovat",
+        "технолог", "технопарк", "technopark", "tech",
+        "it-", "ит-",
+        "маркетинг", "marketing", "smm", "продвижени",
+        "монетизац", "monetiz",
+    ]
+    # Слова-стоп: если есть ЭТИ слова И НЕТ стартап-ключевых, то отбрасываем
+    STOP_KEYWORDS = [
+        "gamedev", "гейм", "разработк игр", "разработке игр", "создание игр", "создании игр",
+        "roblox", "unity", "unreal", "godot", "scratch", "construct",
+        "pygame", "gdevelop",
+        "10-12 лет", "13-14 лет", "15-17 лет", "школьник", "для детей", "юных",
+        "рисован", "живопис", "танц", "вокал", "музык",
+        "кулинар", "поварск", "готовк",
+        "йога", "медитац", "фитнес",
+    ]
+    
+    has_startup_keyword = any(kw in topic_check_text for kw in STARTUP_KEYWORDS)
+    has_stop_keyword = any(kw in topic_check_text for kw in STOP_KEYWORDS)
+    
+    # Если есть стоп-слово и нет стартап-ключевого — отбрасываем
+    if has_stop_keyword and not has_startup_keyword:
+        return ""
+    
+    # Если вообще нет ни одного стартап-ключевого слова — тоже отбрасываем
+    if not has_startup_keyword:
         return ""
 
     if is_online:
